@@ -97,13 +97,16 @@ func main() {
 	}
 	if _, err := os.Stat("config.yaml"); os.IsNotExist(err) {
 		bytes := unwrap(yaml.Marshal(config))
-		os.WriteFile("config.yaml", bytes, 0644)
+		os.WriteFile("config.yaml", bytes, 0600)
 		log.Println("Default configuration has been created.")
 	} else {
 		err := yaml.Unmarshal(unwrap(os.ReadFile("config.yaml")), config)
 		if err != nil {
 			panic(err)
 		}
+	}
+	if config.Servers == nil {
+		panic("No servers configured")
 	}
 	if config.FallbackServer != "" {
 		if _, ok := config.Servers[config.FallbackServer]; !ok {
@@ -157,7 +160,15 @@ const (
 )
 
 func (s *PortalConn) handleConn() {
-	pkt := pk.Packet{}
+	pkt := pk.Packet{} //todo clean idle connections
+	idleTimeout := 2 * time.Minute
+	go func() {
+		timer := time.NewTimer(idleTimeout)
+		defer timer.Stop()
+		<-timer.C
+		log.Println("Closing connection due to idle timeout:", *s.conn)
+		s.conn.Close()
+	}()
 	defer s.conn.Close()
 	for {
 		err := s.conn.ReadPacket(&pkt)
@@ -174,8 +185,9 @@ func (s *PortalConn) handleConn() {
 			err = s.handleLogin(&pkt)
 		case stateConfiguration:
 			err = s.handleConfig(&pkt)
+		case statePlay:
+			err = s.handlePlay(&pkt)
 		case stateWaitTransfer:
-			continue
 		}
 		if err != nil {
 			log.Println("Error handling packet:", err)
@@ -209,7 +221,7 @@ func (s *PortalConn) handleHandshake(pkt *pk.Packet) error {
 		case pk.VarInt(2):
 			s.state = stateLogin
 		case pk.VarInt(3): // todo transfer
-			s.state = stateConfiguration
+			return fmt.Errorf("transfer intent not supported")
 		}
 		return nil
 	}
@@ -224,14 +236,10 @@ func (s *PortalConn) handleStatus(pkt *pk.Packet) error {
 			val = &s.server.config.DefaultInfo
 			log.Println("Client ", *s.conn, " is requesting MOTD from a non-existent server \""+s.serverHost+"\"")
 		}
-		str, err := json.Marshal(val)
-		if err != nil {
-			return err
-		}
-		return s.conn.WritePacket(pk.Marshal(0x00, pk.String(str)))
+		return s.sendStatusResponse(val)
 	case packetid.StatusPingRequest: // PING
 		s.state = stateExit
-		return s.conn.WritePacket(*pkt)
+		return s.sendPingResponse(pkt)
 	}
 	return fmt.Errorf("unexpected status packet %v", pkt.ID)
 }
@@ -250,8 +258,7 @@ func (s *PortalConn) handleLogin(p *pk.Packet) error {
 	destination, ok := s.server.config.Servers[s.serverHost]
 	if !ok {
 		// i18n
-		disconnectMsg, _ := json.Marshal(chat.Text("Hey! A valid server address must be provided.\n Please check the server IP carefully!"))
-		_ = s.conn.WritePacket(pk.Marshal(0x00, pk.String(disconnectMsg)))
+		_ = s.sendDisconnect(chat.Text("Hey! A valid server address must be provided.\n Please check the server IP carefully!"))
 		return fmt.Errorf("disconnected for unknown destination")
 	}
 	s.destination = destination
@@ -267,7 +274,7 @@ func (s *PortalConn) handleLogin(p *pk.Packet) error {
 		log.Println("UUID of player", playerName, "suggests they are offline.")
 		var props []user.Property
 		props = append(props, user.Property{Name: "textures", Value: s.server.config.DefaultSkin})
-		if err := s.conn.WritePacket(pk.Marshal(int(packetid.LoginSuccess), UUID, playerName, pk.Array(props), pk.Boolean(false))); err != nil {
+		if err := s.sendLoginSuccess(UUID, playerName, props, false); err != nil {
 			return err
 		}
 	} else {
@@ -279,9 +286,7 @@ func (s *PortalConn) handleLogin(p *pk.Packet) error {
 			return err
 		}
 		id = resp.ID
-		err = s.conn.WritePacket(pk.Marshal(
-			int(packetid.LoginSuccess),
-			pk.UUID(id), playerName, pk.Array(resp.Properties)))
+		err = s.sendLoginSuccess(pk.UUID(id), playerName, resp.Properties, false)
 		if err != nil {
 			return err
 		}
@@ -296,35 +301,20 @@ func (s *PortalConn) handleConfig(pkt *pk.Packet) error {
 	if pkt.ID != 0x03 {
 		return fmt.Errorf("expect login_acknowledged but got %v", pkt.ID)
 	}
-	if s.online {
-		// direct transfer, no more validation.
-
+	if !s.online {
+		// jump to validation
+		s.state = statePlay
+		return s.sendFinishConfiguration()
 	}
-	// send a keep alive to prevent disconnection, within 30s.
-	//if err := s.conn.WritePacket(pk.Marshal(packetid.ClientboundKeepAlive, pk.Long(0))); err != nil {
-	//	return err
-	//}
-	//if err := s.conn.ReadPacket(pkt); err != nil {
-	//	return err
-	//}
-	//if pkt.ID != int32(packetid.ServerboundKeepAlive) {
-	//	return fmt.Errorf("expect keepalive but got %v", pkt.ID)
-	//}
 	// now transfer with cookies
 	if err := s.goTransfer(s.destination); err != nil {
 		return err
 	}
-	return s.conn.WritePacket(pk.Marshal(0x03)) // finish configuration.
+	return s.sendFinishConfiguration()
 }
 
 func (s *PortalConn) goTransfer(serverAddr string) error {
 	// set cookies...todo
-	packetId := 0
-	if s.state == stateConfiguration {
-		packetId = 0x0B
-	} else {
-		packetId = 0x7A
-	}
 	split := strings.Split(serverAddr, ":")
 	if len(split) != 2 {
 		return fmt.Errorf("invalid server address, expect host:port %v", serverAddr)
@@ -333,28 +323,59 @@ func (s *PortalConn) goTransfer(serverAddr string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.conn.WritePacket(pk.Marshal(packetId, pk.String(split[0]), pk.VarInt(port))); err != nil {
+	if err := s.sendTransfer(split[0], port); err != nil {
 		return err
 	}
 	s.state = stateWaitTransfer
 	return nil
 }
 
+func (s *PortalConn) handlePlay(pkt *pk.Packet) error {
+	return s.conn.WritePacket(pk.Marshal(0x2B,
+		pk.Int(0),
+		pk.Boolean(false),
+		pk.VarInt(0),
+		//pk.Array(pk.Identifier("minecraft:overworld")),
+		pk.VarInt(1),
+		pk.VarInt(1),
+		pk.VarInt(1),
+		pk.Boolean(false),
+		pk.Boolean(false),
+		pk.Boolean(false),
+		pk.VarInt(0),
+		pk.Identifier("minecraft:overworld"),
+		pk.Long(0),
+		pk.UnsignedByte(3),
+		pk.Byte(-1),
+		pk.Boolean(false),
+		pk.Boolean(false),
+		pk.Boolean(false),
+		pk.VarInt(0),
+		pk.VarInt(67),
+		pk.Boolean(false),
+	))
+}
+
 func (s *Server) harvestServerInfo() {
 	for name, addr := range s.config.Servers {
 		conn, err := net.DialMCTimeout(addr, time.Second)
+		defer conn.Close()
 		if err != nil {
 			log.Println("Error connecting to server", name, err)
 			continue
 		}
 		arr := strings.Split(addr, ":")
 		port := unwrap(strconv.Atoi(arr[1]))
-		err = conn.WritePacket(pk.Marshal(0x00, pk.VarInt(0), pk.String(arr[0]), pk.UnsignedShort(port), pk.VarInt(1)))
+		err = sendHandshakePacket(conn, 0, arr[0], port, 1)
 		if err != nil {
 			log.Println("Error sending packet to server", name, err)
 			continue
 		}
-		conn.WritePacket(pk.Marshal(0x00))
+		err = sendStatusRequest(conn)
+		if err != nil {
+			log.Println("Error sending status request to server", name, err)
+			continue
+		}
 		pkt := pk.Packet{}
 		err = conn.ReadPacket(&pkt)
 		if err != nil {
