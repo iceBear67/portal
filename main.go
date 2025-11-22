@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/Tnze/go-mc/chat"
@@ -22,16 +23,20 @@ func unwrap[T any](t T, err error) T {
 func main() {
 	config := loadConfig()
 	log.Println("Loading registry data...")
-	var registryMap server.RegistryMap
+	registryMap := server.NewRegistryMap()
 	for k, v := range config.RegistryData {
 		readAll, err := os.ReadFile(v)
 		if err != nil {
 			log.Fatalf("Error reading registry data: %v", err)
 		}
 		registryMap.Put(k, readAll)
+		log.Println("Loaded registry data for", k, "(size:"+strconv.Itoa(len(readAll)/1024)+"KiB)")
+	}
+	if len(config.RegistryData) == 0 {
+		log.Println("WARNING: No registry data found, offline players may not authenticate.")
 	}
 	ctx := context.Background()
-	serv := unwrap(server.NewServer(config, &registryMap, ctx))
+	serv := unwrap(server.NewServer(config, registryMap, ctx))
 
 	log.Println("Starting server on", config.Listen)
 	err := serv.Start()

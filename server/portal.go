@@ -71,6 +71,7 @@ func (s *Server) Start() error {
 		return err
 	}
 	stopped := false
+	go s.feedRemoteStatus()
 	go func() {
 		select {
 		case <-s.ctx.Done():
@@ -105,6 +106,7 @@ func (s *Server) Start() error {
 
 func (s *PortalConn) startLoginSequence(timeout time.Duration) error {
 	ctx, fn := context.WithTimeout(context.Background(), timeout)
+	s.ctx = ctx
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -162,7 +164,7 @@ func (s *PortalConn) handleStatus() error {
 		if err != nil {
 			return err
 		}
-		if pkt.ID != 0x00 && !statusAnswered {
+		if pkt.ID == 0x00 && !statusAnswered {
 			statusAnswered = true
 			val, ok := s.server.cachedInfo.Get(s.serverHost)
 			if !ok {
@@ -292,14 +294,28 @@ func (s *PortalConn) handlePlay() error {
 			return err
 		}
 		if int(pkt.ID) == s.protocolVersion.FinishConfiguration() { // finish configuration
+			err = s.sendLoginPlay()
+			if err != nil {
+				return err
+			}
 			err = s.sendGameEvent13()
+			if err != nil {
+				return err
+			}
 			err = s.sendEmptyChunk(0, 0)
+			if err != nil {
+				return err
+			}
 			err = s.sendSynchronizePosition()
+			if err != nil {
+				return err
+			}
 		}
 	}
 }
 
-func (s *Server) feedRemoteStatus(ctx context.Context) {
+func (s *Server) feedRemoteStatus() {
+	ctx := s.ctx
 	for name, addr := range s.Config.Servers {
 		result, err := HarvestStatus(addr, ctx, 3*time.Second)
 		if err != nil {

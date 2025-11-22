@@ -65,7 +65,6 @@ func (s *PortalConn) sendBrand(brand string) error {
 }
 
 func (s *PortalConn) sendKeepAliveChallenge(challenge int64) error {
-	// todo select packet id by the current state.
 	id := s.protocolVersion.ClientboundKeepalivePlay()
 	if s.state == stateConfig {
 		id = s.protocolVersion.ClientboundKeepaliveConfig()

@@ -20,6 +20,12 @@ type RegistryMap struct {
 	data *[]RegistryData
 }
 
+func NewRegistryMap() *RegistryMap {
+	return &RegistryMap{
+		data: &[]RegistryData{},
+	}
+}
+
 func (m *RegistryMap) Put(version int, data []byte) {
 	*m.data = append(*m.data, RegistryData{
 		protocolVersion: ProtocolVersion(version),
