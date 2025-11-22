@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Tnze/go-mc/offline"
 	"github.com/google/uuid"
 
 	"github.com/Tnze/go-mc/data/packetid"
@@ -27,7 +28,7 @@ import (
 const verifyTokenLen = 16
 
 // Encrypt a connection, with authentication
-func Encrypt(conn *net.Conn, name string, serverKey *rsa.PrivateKey) (*Resp, error) {
+func Encrypt(conn *net.Conn, name string, serverKey *rsa.PrivateKey, auth bool) (*Resp, error) {
 	publicKey, err := x509.MarshalPKIXPublicKey(&serverKey.PublicKey)
 	if err != nil {
 		return nil, err
@@ -40,7 +41,7 @@ func Encrypt(conn *net.Conn, name string, serverKey *rsa.PrivateKey) (*Resp, err
 	}
 
 	// encryption request
-	err = encryptionRequest(conn, publicKey, verifyToken)
+	err = encryptionRequest(conn, publicKey, verifyToken, auth)
 	if err != nil {
 		return nil, err
 	}
@@ -61,22 +62,30 @@ func Encrypt(conn *net.Conn, name string, serverKey *rsa.PrivateKey) (*Resp, err
 		CFB8.NewCFB8Encrypt(block, SharedSecret),
 		CFB8.NewCFB8Decrypt(block, SharedSecret),
 	)
-	hash := authDigest("", SharedSecret, publicKey)
-	resp, err := authentication(name, hash) // auth
-	if err != nil {
-		return nil, errors.New("auth servers down")
+	var resp *Resp
+	if auth {
+		hash := authDigest("", SharedSecret, publicKey)
+		resp, err = authentication(name, hash) // auth
+		if err != nil {
+			return nil, errors.New("auth servers down")
+		}
+	} else {
+		resp = &Resp{
+			Name:       name,
+			ID:         offline.NameToUUID(name),
+			Properties: make([]user.Property, 0),
+		}
 	}
-
 	return resp, nil
 }
 
-func encryptionRequest(conn *net.Conn, publicKey, verifyToken []byte) error {
+func encryptionRequest(conn *net.Conn, publicKey, verifyToken []byte, auth bool) error {
 	return conn.WritePacket(pk.Marshal(
 		int(packetid.LoginEncryptionRequest),
 		pk.String(""),
 		pk.ByteArray(publicKey),
 		pk.ByteArray(verifyToken),
-		pk.Boolean(true),
+		pk.Boolean(auth),
 	))
 }
 

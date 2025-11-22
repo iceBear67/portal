@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
@@ -13,9 +14,11 @@ import (
 
 	"github.com/Tnze/go-mc/chat"
 	"github.com/Tnze/go-mc/data/packetid"
+	"github.com/Tnze/go-mc/nbt"
 	"github.com/Tnze/go-mc/net"
 	pk "github.com/Tnze/go-mc/net/packet"
 	"github.com/Tnze/go-mc/offline"
+	"github.com/Tnze/go-mc/registry"
 	"github.com/Tnze/go-mc/yggdrasil/user"
 	"github.com/goccy/go-yaml"
 	"github.com/google/uuid"
@@ -76,6 +79,8 @@ func unwrap[T any](t T, err error) T {
 	return t
 }
 
+var registryData []byte
+
 func main() {
 	config := &PortalConfig{
 		Listen:  ":25565",
@@ -113,6 +118,27 @@ func main() {
 			panic("Fallback server does not exist")
 		}
 	}
+	log.Println("Loading registry data...")
+	data := make(map[string]map[string]interface{})
+	if err := json.Unmarshal(unwrap(os.ReadFile("registry.json")), &data); err != nil {
+		panic(err)
+	}
+	buf := &bytes.Buffer{}
+	packetBundle := &bytes.Buffer{}
+	for registry, v := range data {
+		pk.VarInt(0x07).WriteTo(buf)
+		pk.Identifier(registry).WriteTo(buf)
+		pk.VarInt(len(v)).WriteTo(buf)
+		for entryId, v2 := range v {
+			pk.String(entryId).WriteTo(buf)
+			pk.NBT(unwrap(nbt.Marshal(v2))).WriteTo(buf)
+		}
+		pk.VarInt(buf.Len()).WriteTo(packetBundle)
+		buf.WriteTo(packetBundle)
+		buf.Reset()
+	}
+	registryData = packetBundle.Bytes()
+	log.Println("Registry data generated. (Size:", len(registryData), "bytes )")
 	serv := &Server{config: *config, stopped: false, cachedInfo: make(map[string]*ServerListPing)}
 	log.Println("Generating keypair...")
 	serv.privateKey = unwrap(rsa.GenerateKey(rand.Reader, 1024))
@@ -270,28 +296,24 @@ func (s *PortalConn) handleLogin(p *pk.Packet) error {
 		return err
 	}
 	var id = offline.NameToUUID(string(playerName))
-	if id == uuid.UUID(UUID) {
-		log.Println("UUID of player", playerName, "suggests they are offline.")
-		var props []user.Property
-		props = append(props, user.Property{Name: "textures", Value: s.server.config.DefaultSkin})
-		if err := s.sendLoginSuccess(UUID, playerName, props, false); err != nil {
-			return err
-		}
-	} else {
-		log.Println("Challenging", playerName, "with connection encryption")
-		// Try to authenticate with Mojang
-		var resp *Resp
-		var err error
-		if resp, err = Encrypt(s.conn, string(playerName), s.server.privateKey); err != nil {
-			return err
-		}
-		id = resp.ID
-		err = s.sendLoginSuccess(pk.UUID(id), playerName, resp.Properties, false)
-		if err != nil {
-			return err
-		}
-		s.online = true
+	online := id != uuid.UUID(UUID)
+	s.online = online
+	log.Println("Challenging", playerName, "with connection encryption")
+	// Try to authenticate with Mojang
+	var resp *Resp
+	var err error
+	if resp, err = Encrypt(s.conn, string(playerName), s.server.privateKey, online); err != nil {
+		return err
 	}
+	if !online {
+		resp.Properties = append(resp.Properties, user.Property{Name: "textures", Value: s.server.config.DefaultSkin})
+	}
+	id = resp.ID
+	err = s.sendLoginSuccess(pk.UUID(id), playerName, resp.Properties, false)
+	if err != nil {
+		return err
+	}
+
 	log.Println("Player", playerName, "has logged in.")
 	s.state = stateConfiguration
 	return nil
@@ -304,6 +326,9 @@ func (s *PortalConn) handleConfig(pkt *pk.Packet) error {
 	if !s.online {
 		// jump to validation
 		s.state = statePlay
+		go s.keepalive()
+		// todo send registry
+		s.conn.Write(registryData)
 		return s.sendFinishConfiguration()
 	}
 	// now transfer with cookies
@@ -331,37 +356,51 @@ func (s *PortalConn) goTransfer(serverAddr string) error {
 }
 
 func (s *PortalConn) handlePlay(pkt *pk.Packet) error {
-	return s.conn.WritePacket(pk.Marshal(0x2B,
-		pk.Int(0),
-		pk.Boolean(false),
-		pk.VarInt(0),
-		//pk.Array(pk.Identifier("minecraft:overworld")),
-		pk.VarInt(1),
-		pk.VarInt(1),
-		pk.VarInt(1),
-		pk.Boolean(false),
-		pk.Boolean(false),
-		pk.Boolean(false),
-		pk.VarInt(0),
-		pk.Identifier("minecraft:overworld"),
-		pk.Long(0),
-		pk.UnsignedByte(3),
-		pk.Byte(-1),
-		pk.Boolean(false),
-		pk.Boolean(false),
-		pk.Boolean(false),
-		pk.VarInt(0),
-		pk.VarInt(67),
-		pk.Boolean(false),
-	))
+	if pkt.ID == 0x03 { // finish configuration
+		s.conn.WritePacket(pk.Marshal(
+			packetid.ClientboundLogin,
+			pk.Int(114514),
+			pk.Boolean(false), // Is Hardcore
+			pk.Byte(3),
+			pk.Byte(-1),
+			pk.Array([]pk.Identifier{
+				"minecraft:overworld",
+			}),
+			pk.NBT(registry.NetworkCodec{}),
+			pk.Identifier("minecraft:overworld"),
+			pk.Identifier("world"),
+			pk.Long(0),
+			pk.VarInt(0),      // Max players (ignored by client)
+			pk.VarInt(2),      // View Distance
+			pk.VarInt(2),      // Simulation Distance
+			pk.Boolean(false), // Reduced Debug Info
+			pk.Boolean(false), // Enable respawn screen
+			pk.Boolean(false), // Is Debug
+			pk.Boolean(false), // Is Flat
+			pk.Boolean(false), // Has Last Death Location
+		))
+	}
+	return nil
+}
+
+func (s *PortalConn) keepalive() {
+	ticker := time.NewTicker(time.Second * 15)
+	defer ticker.Stop()
+	for range ticker.C {
+		err := s.conn.WritePacket(pk.Marshal(packetid.ClientboundKeepAlive, pk.Long(time.Now().UnixNano()/1e6)))
+		if err != nil {
+			log.Println("Error sending keepalive:", err)
+			return
+		}
+	}
 }
 
 func (s *Server) harvestServerInfo() {
 	for name, addr := range s.config.Servers {
 		conn, err := net.DialMCTimeout(addr, time.Second)
-		defer conn.Close()
 		if err != nil {
 			log.Println("Error connecting to server", name, err)
+			conn.Close()
 			continue
 		}
 		arr := strings.Split(addr, ":")
@@ -369,15 +408,18 @@ func (s *Server) harvestServerInfo() {
 		err = sendHandshakePacket(conn, 0, arr[0], port, 1)
 		if err != nil {
 			log.Println("Error sending packet to server", name, err)
+			conn.Close()
 			continue
 		}
 		err = sendStatusRequest(conn)
 		if err != nil {
 			log.Println("Error sending status request to server", name, err)
+			conn.Close()
 			continue
 		}
 		pkt := pk.Packet{}
 		err = conn.ReadPacket(&pkt)
+		conn.Close()
 		if err != nil {
 			log.Println("Error reading packet when harvesting serverinfo:", err)
 			continue
