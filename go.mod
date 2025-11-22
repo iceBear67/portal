@@ -5,17 +5,8 @@ go 1.21.0
 toolchain go1.23.2
 
 require (
-	github.com/BurntSushi/toml v1.2.1
 	github.com/Tnze/go-mc v1.19.4-0.20230422160805-5f06fa651019
+	github.com/goccy/go-yaml v1.18.0
 	github.com/google/uuid v1.3.0
-	go.uber.org/zap v1.24.0
-	golang.org/x/exp v0.0.0-20230321023759-10a507213a29
-	golang.org/x/time v0.3.0
-)
-
-require (
-	github.com/goccy/go-yaml v1.18.0 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
-	go.uber.org/atomic v1.10.0 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
+	github.com/patrickmn/go-cache v2.1.0+incompatible
 )
