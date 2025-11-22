@@ -102,11 +102,11 @@ func (s *PortalConn) sendEmptyChunk(chunkX int, chunkZ int) error {
 }
 
 func (s *PortalConn) sendGameEvent13() error {
-	return s.conn.WritePacket(pk.Marshal(0x22, pk.UnsignedByte(13), pk.Float(0))) // gameevent 13
+	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.GameEvent(), pk.UnsignedByte(13), pk.Float(0))) // gameevent 13
 }
 
 func (s *PortalConn) sendSynchronizePosition() error {
-	return s.conn.WritePacket(pk.Marshal(0x41, pk.VarInt(1919), // Synchronize position todo cache
+	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.SynchronizePosition(), pk.VarInt(1919), // Synchronize position todo cache
 		pk.Double(0),  //X
 		pk.Double(70), //Y
 		pk.Double(0),  //Z
@@ -117,6 +117,10 @@ func (s *PortalConn) sendSynchronizePosition() error {
 		pk.Float(0),   // pitch
 		pk.Int(0),
 	))
+}
+
+func (s *PortalConn) sendResetChat() error {
+	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.ResetChatPlay()))
 }
 
 func sendHandshakePacket(conn *net.Conn, protocolVersion int, serverAddress string, serverPort int, nextState int) error {

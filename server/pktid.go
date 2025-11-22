@@ -43,3 +43,15 @@ func (s ProtocolVersion) LoginAcknowledged() int {
 func (s ProtocolVersion) LoginPlay() int {
 	return 0x2b
 }
+
+func (s ProtocolVersion) SynchronizePosition() int {
+	return 0x41
+}
+
+func (s ProtocolVersion) GameEvent() int {
+	return 0x22
+}
+
+func (s ProtocolVersion) ResetChatPlay() int {
+	return 0x06
+}
