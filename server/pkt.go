@@ -22,7 +22,7 @@ func (s *PortalConn) sendPingResponse(pkt *pk.Packet) error {
 	return s.conn.WritePacket(*pkt)
 }
 
-func (s *PortalConn) sendDisconnect(message chat.Message) error {
+func (s *PortalConn) SendDisconnect(message chat.Message) error {
 	disconnectMsg, err := json.Marshal(message)
 	if err != nil {
 		return err
@@ -52,7 +52,7 @@ func (s *PortalConn) sendFinishConfiguration() error {
 	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.FinishConfiguration()))
 }
 
-func (s *PortalConn) sendTransfer(host string, port int) error {
+func (s *PortalConn) SendTransfer(host string, port int) error {
 	packetId := s.protocolVersion.TransferPlay()
 	if s.state == stateConfig {
 		packetId = s.protocolVersion.TransferConfig()
@@ -119,8 +119,21 @@ func (s *PortalConn) sendSynchronizePosition() error {
 	))
 }
 
-func (s *PortalConn) sendResetChat() error {
+func (s *PortalConn) SendResetChat() error {
 	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.ResetChatPlay()))
+}
+
+func (s *PortalConn) ReadChatMessage(pkt *pk.Packet) (string, error) {
+	var msg pk.String
+	err := pkt.Scan(&msg)
+	if err != nil {
+		return "", err
+	}
+	return string(msg), nil
+}
+
+func (s *PortalConn) SendChatMessage(ch chat.Message, overlay bool) error {
+	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.SystemMessage(), ch, pk.Boolean(overlay)))
 }
 
 func sendHandshakePacket(conn *net.Conn, protocolVersion int, serverAddress string, serverPort int, nextState int) error {

@@ -32,7 +32,8 @@ func (s *PortalConn) runKeepAlive(interval time.Duration) {
 
 func (s *PortalConn) goTransfer(serverAddr string) error {
 	// set cookies...todo
-	log.Println("Redirecting", s.player, "to", serverAddr)
+	log.Println("Redirecting", s.playerId, "to", serverAddr)
+	s.listener.onTransfer(s, serverAddr)
 	split := strings.Split(serverAddr, ":")
 	if len(split) != 2 {
 		return fmt.Errorf("invalid server address, expect host:port %v", serverAddr)
@@ -41,7 +42,7 @@ func (s *PortalConn) goTransfer(serverAddr string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.sendTransfer(split[0], port); err != nil {
+	if err := s.SendTransfer(split[0], port); err != nil {
 		return err
 	}
 	// waiting for transfer

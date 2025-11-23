@@ -17,16 +17,24 @@ import (
 	"github.com/go-mc/server/server/slp"
 	"github.com/google/uuid"
 	"github.com/patrickmn/go-cache"
+	"github.com/werbenhu/eventbus"
 )
 
 type ProtocolVersion int
 
 type Server struct {
-	Config      *PortalConfig
-	cachedInfo  *cache.Cache
-	PrivateKey  *rsa.PrivateKey
-	registryMap *RegistryMap
-	ctx         context.Context
+	Config        *PortalConfig
+	cachedInfo    *cache.Cache
+	PrivateKey    *rsa.PrivateKey
+	registryMap   *RegistryMap
+	eventBus      *eventbus.EventBus
+	eventListener EventListenerHost
+	ctx           context.Context
+}
+
+type EventListenerHost interface {
+	onNewConnection(conn *PortalConn) bool
+	onDisconnect(conn *PortalConn)
 }
 
 const (
@@ -37,18 +45,6 @@ const (
 	statePlay      = 4
 )
 
-type PortalConn struct {
-	server          *Server
-	player          *uuid.UUID
-	state           int
-	serverHost      string
-	destination     string
-	protocolVersion ProtocolVersion
-	conn            *net.Conn
-	online          bool
-	ctx             context.Context
-}
-
 func NewServer(config *PortalConfig, registry *RegistryMap, ctx context.Context) (*Server, error) {
 	log.Println("Generating keypair...")
 	privKey, err := rsa.GenerateKey(rand.Reader, 1024)
@@ -56,13 +52,19 @@ func NewServer(config *PortalConfig, registry *RegistryMap, ctx context.Context)
 		return nil, err
 	}
 	server := &Server{
-		Config:      config,
-		cachedInfo:  cache.New(config.CacheInvalidate, 5*time.Second),
-		ctx:         ctx,
-		PrivateKey:  privKey,
-		registryMap: registry,
+		Config:        config,
+		cachedInfo:    cache.New(config.CacheInvalidate, 5*time.Second),
+		ctx:           ctx,
+		PrivateKey:    privKey,
+		registryMap:   registry,
+		eventBus:      eventbus.New(),
+		eventListener: StubListener(0),
 	}
 	return server, nil
+}
+
+func (s *Server) EventBus() *eventbus.EventBus {
+	return s.eventBus
 }
 
 func (s *Server) Start() error {
@@ -90,18 +92,28 @@ func (s *Server) Start() error {
 		}
 		pc := PortalConn{
 			server:          s,
-			serverHost:      "",
+			requestedHost:   "",
 			protocolVersion: 0,
 			state:           stateHandshake,
 			conn:            &conn,
+			listener:        StubListener(1),
+		}
+		allow := s.eventListener.onNewConnection(&pc)
+		if !allow {
+			continue
 		}
 		go func() {
+			defer s.eventListener.onDisconnect(&pc)
 			err := pc.startLoginSequence(s.Config.AuthTimeout)
 			if err != nil {
 				log.Println("Error from connection", conn.Socket.RemoteAddr(), ":", err)
 			}
 		}()
 	}
+}
+
+func (s *Server) SetupListener(listener EventListenerHost) {
+	s.eventListener = listener
 }
 
 func (s *PortalConn) startLoginSequence(timeout time.Duration) error {
@@ -118,6 +130,18 @@ func (s *PortalConn) startLoginSequence(timeout time.Duration) error {
 	}()
 	defer fn()
 	return s.handleHandshake()
+}
+
+func (s *Server) feedRemoteStatus() {
+	ctx := s.ctx
+	for name, addr := range s.Config.Servers {
+		result, err := HarvestStatus(addr, ctx, 3*time.Second)
+		if err != nil {
+			log.Printf("Error getting server status from %v: %v", addr, err)
+			continue
+		}
+		s.cachedInfo.SetDefault(name, result)
+	}
 }
 
 func (s *PortalConn) handleHandshake() error {
@@ -140,7 +164,7 @@ func (s *PortalConn) handleHandshake() error {
 		return err
 	}
 	s.protocolVersion = ProtocolVersion(Protocol)
-	s.serverHost = string(ServerAddress)
+	s.requestedHost = string(ServerAddress)
 	switch Intent {
 	case pk.VarInt(1):
 		return s.handleStatus()
@@ -152,6 +176,7 @@ func (s *PortalConn) handleHandshake() error {
 }
 
 func (s *PortalConn) handleStatus() error {
+	s.listener.onStateTransition(s, stateStatus)
 	s.state = stateStatus
 	var pkt pk.Packet
 	pingAnswered := false
@@ -166,10 +191,10 @@ func (s *PortalConn) handleStatus() error {
 		}
 		if pkt.ID == 0x00 && !statusAnswered {
 			statusAnswered = true
-			val, ok := s.server.cachedInfo.Get(s.serverHost)
+			val, ok := s.server.cachedInfo.Get(s.requestedHost)
 			if !ok {
 				val = &s.server.Config.DefaultInfo
-				log.Println("client", s.conn.Socket.RemoteAddr(), "is requesting status for a non-existent server \""+s.serverHost+"\"")
+				log.Println("client", s.conn.Socket.RemoteAddr(), "is requesting status for a non-existent server \""+s.requestedHost+"\"")
 			}
 			err = s.sendStatusResponse(val.(*slp.ServerListPing))
 			if err != nil {
@@ -189,6 +214,7 @@ func (s *PortalConn) handleStatus() error {
 }
 
 func (s *PortalConn) handleLogin() error {
+	s.listener.onStateTransition(s, stateLogin)
 	s.state = stateLogin
 	var pkt pk.Packet
 	err := s.conn.ReadPacket(&pkt)
@@ -200,13 +226,13 @@ func (s *PortalConn) handleLogin() error {
 	}
 	// check host and destination, otherwise reject.
 	fallback := s.server.Config.FallbackServer
-	destination, ok := s.server.Config.Servers[s.serverHost]
+	destination, ok := s.server.Config.Servers[s.requestedHost]
 	if !ok {
 		if fallback != "" {
 			s.destination = fallback
 		} else {
 			// todo i18n
-			_ = s.sendDisconnect(chat.Text("Hey! A valid server address must be provided.\n Please check the server IP carefully!"))
+			_ = s.SendDisconnect(chat.Text("Hey! A valid server address must be provided.\n Please check the server IP carefully!"))
 			return fmt.Errorf("disconnected for unknown destination")
 		}
 	} else {
@@ -220,6 +246,7 @@ func (s *PortalConn) handleLogin() error {
 	if err := pkt.Scan(&playerName, &clientSuggestId); err != nil {
 		return err
 	}
+	s.playerName = string(playerName)
 	var theoryOfflineId = offline.NameToUUID(string(playerName))
 	s.online = theoryOfflineId != uuid.UUID(clientSuggestId)
 	if s.online {
@@ -231,7 +258,7 @@ func (s *PortalConn) handleLogin() error {
 		if resp, err = Encrypt(s.conn, string(playerName), s.server.PrivateKey, s.online); err != nil {
 			return err
 		}
-		s.player = &resp.ID
+		s.playerId = &resp.ID
 		err = s.sendLoginSuccess(pk.UUID(resp.ID), playerName, resp.Properties, false)
 		if err != nil {
 			return err
@@ -239,6 +266,7 @@ func (s *PortalConn) handleLogin() error {
 		log.Println("Player", playerName, "has been authenticated by Yggdrasil.")
 	} else {
 		prop := []user.Property{{Name: "textures", Value: s.server.Config.DefaultSkin}}
+		s.playerId = &theoryOfflineId
 		err = s.sendLoginSuccess(pk.UUID(theoryOfflineId), playerName, prop, true)
 		if err != nil {
 			return err
@@ -249,6 +277,7 @@ func (s *PortalConn) handleLogin() error {
 }
 
 func (s *PortalConn) handleConfiguration() error {
+	s.listener.onStateTransition(s, stateConfig)
 	s.state = stateConfig
 	var pkt pk.Packet
 	err := s.conn.ReadPacket(&pkt)
@@ -258,12 +287,15 @@ func (s *PortalConn) handleConfiguration() error {
 	if int(pkt.ID) != s.protocolVersion.LoginAcknowledged() {
 		return fmt.Errorf("expect login_acknowledged but got %v", pkt.ID)
 	}
-	if s.online {
+
+	setupLimbo := s.listener.onAuthentication(s, s.online)
+	if !setupLimbo {
 		if err := s.goTransfer(s.destination); err != nil {
 			return err
 		}
 		return s.sendFinishConfiguration()
 	}
+
 	// start limbo authentication
 	err = s.sendBrand("portal")
 	if err != nil {
@@ -286,14 +318,38 @@ func (s *PortalConn) handleConfiguration() error {
 }
 
 func (s *PortalConn) handlePlay() error {
+	s.listener.onStateTransition(s, statePlay)
 	s.state = statePlay
+	if err := s.handlePlayInitialization(); err != nil {
+		return err
+	}
 	var pkt pk.Packet
 	for {
 		err := s.conn.ReadPacket(&pkt)
 		if err != nil {
 			return err
 		}
-		if int(pkt.ID) == s.protocolVersion.FinishConfiguration() { // finish configuration
+		if int(pkt.ID) == s.protocolVersion.ChatMessage() {
+			msg, err := s.ReadChatMessage(&pkt)
+			if err != nil {
+				return err
+			}
+			s.listener.onPlayerChat(s, msg)
+		}
+	}
+}
+
+func (s *PortalConn) handlePlayInitialization() error {
+	phase := 0
+	var pkt pk.Packet
+	for {
+		err := s.conn.ReadPacket(&pkt)
+		if err != nil {
+			return err
+		}
+		if int(pkt.ID) == s.protocolVersion.FinishConfiguration() && phase == 0 { // finish configuration
+			phase = 1
+			s.listener.onLimboJoin(s)
 			err = s.sendLoginPlay()
 			if err != nil {
 				return err
@@ -310,18 +366,12 @@ func (s *PortalConn) handlePlay() error {
 			if err != nil {
 				return err
 			}
+		} else if int(pkt.ID) == s.protocolVersion.PlayerLoadedJoin() && phase == 1 {
+			phase = 2
+			s.listener.onPlayerReady(s)
+			log.Println("Player", s.playerName+"/"+s.playerId.String(), "has joined.")
+			break
 		}
 	}
-}
-
-func (s *Server) feedRemoteStatus() {
-	ctx := s.ctx
-	for name, addr := range s.Config.Servers {
-		result, err := HarvestStatus(addr, ctx, 3*time.Second)
-		if err != nil {
-			log.Printf("Error getting server status from %v: %v", addr, err)
-			continue
-		}
-		s.cachedInfo.SetDefault(name, result)
-	}
+	return nil
 }

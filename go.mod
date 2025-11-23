@@ -10,3 +10,5 @@ require (
 	github.com/google/uuid v1.3.0
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 )
+
+require github.com/werbenhu/eventbus v1.0.9 // indirect

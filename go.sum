@@ -6,3 +6,5 @@ github.com/google/uuid v1.3.0 h1:t6JiXgmwXMjEs8VusXIJk2BXHsn+wx8BZdTaoZ5fu7I=
 github.com/google/uuid v1.3.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/patrickmn/go-cache v2.1.0+incompatible h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=
 github.com/patrickmn/go-cache v2.1.0+incompatible/go.mod h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=
+github.com/werbenhu/eventbus v1.0.9 h1:pZfb63mGAfxIxaS+5EOd3C/vfZ3fwEpN90EPHBo6G7c=
+github.com/werbenhu/eventbus v1.0.9/go.mod h1:ob9wjNbQ5BVlpnf/BsFwJoPRZn1Gq9EOjHWPkChIfO8=

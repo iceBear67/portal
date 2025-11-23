@@ -55,3 +55,15 @@ func (s ProtocolVersion) GameEvent() int {
 func (s ProtocolVersion) ResetChatPlay() int {
 	return 0x06
 }
+
+func (s ProtocolVersion) PlayerLoadedJoin() int {
+	return 0x2b
+}
+
+func (s ProtocolVersion) ChatMessage() int {
+	return 0x08
+}
+
+func (s ProtocolVersion) SystemMessage() int {
+	return 0x72
+}
