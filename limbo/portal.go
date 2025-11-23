@@ -1,4 +1,4 @@
-package server
+package limbo
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	pk "github.com/Tnze/go-mc/net/packet"
 	"github.com/Tnze/go-mc/offline"
 	"github.com/Tnze/go-mc/yggdrasil/user"
-	"github.com/go-mc/server/server/slp"
+	"github.com/go-mc/server/limbo/slp"
 	"github.com/google/uuid"
 	"github.com/patrickmn/go-cache"
 	"github.com/werbenhu/eventbus"

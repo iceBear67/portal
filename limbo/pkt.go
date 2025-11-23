@@ -1,4 +1,4 @@
-package server
+package limbo
 
 import (
 	"encoding/json"
@@ -7,7 +7,7 @@ import (
 	"github.com/Tnze/go-mc/net"
 	pk "github.com/Tnze/go-mc/net/packet"
 	"github.com/Tnze/go-mc/yggdrasil/user"
-	"github.com/go-mc/server/server/slp"
+	"github.com/go-mc/server/limbo/slp"
 )
 
 func (s *PortalConn) sendStatusResponse(info *slp.ServerListPing) error {

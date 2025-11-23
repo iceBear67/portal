@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/Tnze/go-mc/chat"
-	"github.com/go-mc/server/server"
-	"github.com/go-mc/server/server/slp"
+	"github.com/go-mc/server/limbo"
+	"github.com/go-mc/server/limbo/slp"
 	"github.com/goccy/go-yaml"
 )
 
@@ -23,7 +23,7 @@ func unwrap[T any](t T, err error) T {
 func main() {
 	config := loadConfig()
 	log.Println("Loading registry data...")
-	registryMap := server.NewRegistryMap()
+	registryMap := limbo.NewRegistryMap()
 	for k, v := range config.RegistryData {
 		readAll, err := os.ReadFile(v)
 		if err != nil {
@@ -36,7 +36,7 @@ func main() {
 		log.Println("WARNING: No registry data found, offline players may not authenticate.")
 	}
 	ctx := context.Background()
-	serv := unwrap(server.NewServer(config, registryMap, ctx))
+	serv := unwrap(limbo.NewServer(config, registryMap, ctx))
 
 	log.Println("Starting server on", config.Listen)
 	err := serv.Start()
@@ -45,8 +45,8 @@ func main() {
 	}
 }
 
-func loadConfig() *server.PortalConfig {
-	config := &server.PortalConfig{
+func loadConfig() *limbo.PortalConfig {
+	config := &limbo.PortalConfig{
 		Listen:          ":25565",
 		FallbackServer:  "",
 		CacheInvalidate: 60 * time.Second,

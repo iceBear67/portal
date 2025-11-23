@@ -1,4 +1,4 @@
-package server
+package limbo
 
 func (s ProtocolVersion) StatusResponse() int {
 	return 0x00

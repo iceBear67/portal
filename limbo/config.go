@@ -1,9 +1,9 @@
-package server
+package limbo
 
 import (
 	"time"
 
-	"github.com/go-mc/server/server/slp"
+	"github.com/go-mc/server/limbo/slp"
 )
 
 type PortalConfig struct {
