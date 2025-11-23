@@ -33,8 +33,8 @@ type Server struct {
 }
 
 type EventListenerHost interface {
-	onNewConnection(conn *PortalConn) bool
-	onDisconnect(conn *PortalConn)
+	OnNewConnection(conn *PortalConn) bool
+	OnDisconnect(conn *PortalConn)
 }
 
 const (
@@ -73,7 +73,14 @@ func (s *Server) Start() error {
 		return err
 	}
 	stopped := false
-	go s.feedRemoteStatus()
+	s.feedRemoteStatus()
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		select {
+		case <-t.C:
+			s.feedRemoteStatus()
+		}
+	}()
 	go func() {
 		select {
 		case <-s.ctx.Done():
@@ -98,12 +105,12 @@ func (s *Server) Start() error {
 			conn:            &conn,
 			listener:        StubListener(1),
 		}
-		allow := s.eventListener.onNewConnection(&pc)
+		allow := s.eventListener.OnNewConnection(&pc)
 		if !allow {
 			continue
 		}
 		go func() {
-			defer s.eventListener.onDisconnect(&pc)
+			defer s.eventListener.OnDisconnect(&pc)
 			err := pc.startLoginSequence(s.Config.AuthTimeout)
 			if err != nil {
 				log.Println("Error from connection", conn.Socket.RemoteAddr(), ":", err)
@@ -176,7 +183,7 @@ func (s *PortalConn) handleHandshake() error {
 }
 
 func (s *PortalConn) handleStatus() error {
-	s.listener.onStateTransition(s, stateStatus)
+	s.listener.OnStateTransition(s, stateStatus)
 	s.state = stateStatus
 	var pkt pk.Packet
 	pingAnswered := false
@@ -214,7 +221,7 @@ func (s *PortalConn) handleStatus() error {
 }
 
 func (s *PortalConn) handleLogin() error {
-	s.listener.onStateTransition(s, stateLogin)
+	s.listener.OnStateTransition(s, stateLogin)
 	s.state = stateLogin
 	var pkt pk.Packet
 	err := s.conn.ReadPacket(&pkt)
@@ -249,13 +256,11 @@ func (s *PortalConn) handleLogin() error {
 	s.playerName = string(playerName)
 	var theoryOfflineId = offline.NameToUUID(string(playerName))
 	s.online = theoryOfflineId != uuid.UUID(clientSuggestId)
-	if s.online {
-		log.Println("Authenticating", playerName, "with connection encryption")
-	}
 	// Try to authenticate with Mojang
 	if s.online {
+		log.Println("Authenticating", playerName, "with connection encryption")
 		var resp *Resp
-		if resp, err = Encrypt(s.conn, string(playerName), s.server.PrivateKey, s.online); err != nil {
+		if resp, err = s.listener.OnYggdrasilChallenge(s, string(playerName), s.server.PrivateKey); err != nil {
 			return err
 		}
 		s.playerId = &resp.ID
@@ -277,7 +282,7 @@ func (s *PortalConn) handleLogin() error {
 }
 
 func (s *PortalConn) handleConfiguration() error {
-	s.listener.onStateTransition(s, stateConfig)
+	s.listener.OnStateTransition(s, stateConfig)
 	s.state = stateConfig
 	var pkt pk.Packet
 	err := s.conn.ReadPacket(&pkt)
@@ -318,7 +323,7 @@ func (s *PortalConn) handleConfiguration() error {
 }
 
 func (s *PortalConn) handlePlay() error {
-	s.listener.onStateTransition(s, statePlay)
+	s.listener.OnStateTransition(s, statePlay)
 	s.state = statePlay
 	if err := s.handlePlayInitialization(); err != nil {
 		return err
@@ -334,7 +339,7 @@ func (s *PortalConn) handlePlay() error {
 			if err != nil {
 				return err
 			}
-			s.listener.onPlayerChat(s, msg)
+			s.listener.OnPlayerChat(s, msg)
 		}
 	}
 }
@@ -349,7 +354,7 @@ func (s *PortalConn) handlePlayInitialization() error {
 		}
 		if int(pkt.ID) == s.protocolVersion.FinishConfiguration() && phase == 0 { // finish configuration
 			phase = 1
-			s.listener.onLimboJoin(s)
+			s.listener.OnLimboJoin(s)
 			err = s.sendLoginPlay()
 			if err != nil {
 				return err
@@ -368,7 +373,7 @@ func (s *PortalConn) handlePlayInitialization() error {
 			}
 		} else if int(pkt.ID) == s.protocolVersion.PlayerLoadedJoin() && phase == 1 {
 			phase = 2
-			s.listener.onPlayerReady(s)
+			s.listener.OnPlayerReady(s)
 			log.Println("Player", s.playerName+"/"+s.playerId.String(), "has joined.")
 			break
 		}

@@ -125,6 +125,8 @@ func encryptionResponse(conn *net.Conn, serverKey *rsa.PrivateKey, verifyToken [
 }
 
 func authentication(name, hash string) (*Resp, error) {
+	url := "https://sessionserver.mojang.com/session/minecraft/hasJoined?username=" + name + "&serverId=" + hash
+	println(url)
 	resp, err := http.Get("https://sessionserver.mojang.com/session/minecraft/hasJoined?username=" + name + "&serverId=" + hash)
 	if err != nil {
 		return nil, err
