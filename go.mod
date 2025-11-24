@@ -11,4 +11,8 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 )
 
-require github.com/werbenhu/eventbus v1.0.9 // indirect
+require (
+	github.com/jmoiron/sqlx v1.4.0 // indirect
+	github.com/mattn/go-sqlite3 v1.14.32 // indirect
+	github.com/werbenhu/eventbus v1.0.9 // indirect
+)

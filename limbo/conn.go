@@ -15,7 +15,7 @@ type PortalConn struct {
 	playerName string
 	online     bool
 
-	// initialized with stateHandshake
+	// initialized with StateHandshake
 	state int
 
 	// not valid until handshake complete
@@ -29,16 +29,45 @@ type PortalConn struct {
 	listener ConnectionListener
 }
 
+func (s *PortalConn) Server() *Server {
+	return s.server
+}
+
+func (s *PortalConn) PlayerId() *uuid.UUID {
+	return s.playerId
+}
+
+func (s *PortalConn) PlayerName() string {
+	return s.playerName
+}
+
+func (s *PortalConn) Online() bool {
+	return s.online
+}
+
+func (s *PortalConn) RequestedHost() string {
+	return s.requestedHost
+}
+
+func (s *PortalConn) Destination() string {
+	return s.destination
+}
+
+func (s *PortalConn) ProtocolVersion() ProtocolVersion {
+	return s.protocolVersion
+}
+
 type ConnectionListener interface {
 	// setup cookies here
 	OnTransfer(conn *PortalConn, target string)
-	onAuthentication(conn *PortalConn, online bool) (setupLimbo bool)
+	OnAuthentication(conn *PortalConn, online bool) (setupLimbo bool)
 	OnLimboJoin(conn *PortalConn)
 	OnPlayerReady(conn *PortalConn)
 	OnPlayerChat(conn *PortalConn, message string)
-	OnYggdrasilChallenge(conn *PortalConn, playerName string, privateKey *rsa.PrivateKey) (*Resp, error)
+	OnYggdrasilChallenge(conn *PortalConn, playerName string, clientSuggestedId uuid.UUID, privateKey *rsa.PrivateKey) (*Resp, error)
 
 	OnStateTransition(conn *PortalConn, newState int)
+	OnDisconnect(conn *PortalConn)
 }
 
 func (c *PortalConn) SetupListener(l ConnectionListener) {
@@ -57,10 +86,14 @@ func (c *PortalConn) Context() context.Context {
 	return c.ctx
 }
 
+func (c *PortalConn) Connection() *net.Conn {
+	return c.conn
+}
+
 type StubListener int
 
-func (s StubListener) OnYggdrasilChallenge(conn *PortalConn, playerName string, privateKey *rsa.PrivateKey) (*Resp, error) {
-	return Encrypt(conn.conn, playerName, privateKey, true)
+func (s StubListener) OnYggdrasilChallenge(conn *PortalConn, playerName string, clientSuggestion uuid.UUID, privateKey *rsa.PrivateKey) (*Resp, error) {
+	return Encrypt(conn.conn, playerName, privateKey, true, "https://sessionserver.mojang.com/")
 }
 
 func (s StubListener) OnNewConnection(conn *PortalConn) bool {
@@ -74,8 +107,8 @@ func (s StubListener) OnTransfer(conn *PortalConn, target string) {
 
 }
 
-func (s StubListener) onAuthentication(conn *PortalConn, online bool) (setupLimbo bool) {
-	return !online
+func (s StubListener) OnAuthentication(conn *PortalConn, online bool) (setupLimbo bool) {
+	return false
 }
 
 func (s StubListener) OnLimboJoin(conn *PortalConn) {

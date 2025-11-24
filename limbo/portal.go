@@ -32,17 +32,21 @@ type Server struct {
 	ctx           context.Context
 }
 
+func (s *Server) Ctx() context.Context {
+	return s.ctx
+}
+
 type EventListenerHost interface {
 	OnNewConnection(conn *PortalConn) bool
 	OnDisconnect(conn *PortalConn)
 }
 
 const (
-	stateHandshake = 0
-	stateLogin     = 1
-	stateStatus    = 2
-	stateConfig    = 3
-	statePlay      = 4
+	StateHandshake = 0
+	StateLogin     = 1
+	StateStatus    = 2
+	StateConfig    = 3
+	StatePlay      = 4
 )
 
 func NewServer(config *PortalConfig, registry *RegistryMap, ctx context.Context) (*Server, error) {
@@ -101,7 +105,7 @@ func (s *Server) Start() error {
 			server:          s,
 			requestedHost:   "",
 			protocolVersion: 0,
-			state:           stateHandshake,
+			state:           StateHandshake,
 			conn:            &conn,
 			listener:        StubListener(1),
 		}
@@ -183,8 +187,8 @@ func (s *PortalConn) handleHandshake() error {
 }
 
 func (s *PortalConn) handleStatus() error {
-	s.listener.OnStateTransition(s, stateStatus)
-	s.state = stateStatus
+	s.listener.OnStateTransition(s, StateStatus)
+	s.state = StateStatus
 	var pkt pk.Packet
 	pingAnswered := false
 	statusAnswered := false
@@ -221,8 +225,8 @@ func (s *PortalConn) handleStatus() error {
 }
 
 func (s *PortalConn) handleLogin() error {
-	s.listener.OnStateTransition(s, stateLogin)
-	s.state = stateLogin
+	s.listener.OnStateTransition(s, StateLogin)
+	s.state = StateLogin
 	var pkt pk.Packet
 	err := s.conn.ReadPacket(&pkt)
 	if err != nil {
@@ -260,7 +264,7 @@ func (s *PortalConn) handleLogin() error {
 	if s.online {
 		log.Println("Authenticating", playerName, "with connection encryption")
 		var resp *Resp
-		if resp, err = s.listener.OnYggdrasilChallenge(s, string(playerName), s.server.PrivateKey); err != nil {
+		if resp, err = s.listener.OnYggdrasilChallenge(s, string(playerName), uuid.UUID(clientSuggestId), s.server.PrivateKey); err != nil {
 			return err
 		}
 		s.playerId = &resp.ID
@@ -282,8 +286,8 @@ func (s *PortalConn) handleLogin() error {
 }
 
 func (s *PortalConn) handleConfiguration() error {
-	s.listener.OnStateTransition(s, stateConfig)
-	s.state = stateConfig
+	s.listener.OnStateTransition(s, StateConfig)
+	s.state = StateConfig
 	var pkt pk.Packet
 	err := s.conn.ReadPacket(&pkt)
 	if err != nil {
@@ -292,8 +296,8 @@ func (s *PortalConn) handleConfiguration() error {
 	if int(pkt.ID) != s.protocolVersion.LoginAcknowledged() {
 		return fmt.Errorf("expect login_acknowledged but got %v", pkt.ID)
 	}
-
-	setupLimbo := s.listener.onAuthentication(s, s.online)
+	go s.runKeepAlive(s.server.Config.Keepalive)
+	setupLimbo := s.listener.OnAuthentication(s, s.online)
 	if !setupLimbo {
 		if err := s.goTransfer(s.destination); err != nil {
 			return err
@@ -306,7 +310,6 @@ func (s *PortalConn) handleConfiguration() error {
 	if err != nil {
 		return err
 	}
-	go s.runKeepAlive(s.server.Config.Keepalive)
 	data, ok := s.server.registryMap.Next(s.protocolVersion)
 	if !ok {
 		return fmt.Errorf("no registry data found for protocol version %v", s.protocolVersion)
@@ -323,8 +326,8 @@ func (s *PortalConn) handleConfiguration() error {
 }
 
 func (s *PortalConn) handlePlay() error {
-	s.listener.OnStateTransition(s, statePlay)
-	s.state = statePlay
+	s.listener.OnStateTransition(s, StatePlay)
+	s.state = StatePlay
 	if err := s.handlePlayInitialization(); err != nil {
 		return err
 	}

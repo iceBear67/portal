@@ -54,7 +54,7 @@ func (s *PortalConn) sendFinishConfiguration() error {
 
 func (s *PortalConn) SendTransfer(host string, port int) error {
 	packetId := s.protocolVersion.TransferPlay()
-	if s.state == stateConfig {
+	if s.state == StateConfig {
 		packetId = s.protocolVersion.TransferConfig()
 	}
 	return s.conn.WritePacket(pk.Marshal(packetId, pk.String(host), pk.VarInt(port)))
@@ -66,7 +66,7 @@ func (s *PortalConn) sendBrand(brand string) error {
 
 func (s *PortalConn) sendKeepAliveChallenge(challenge int64) error {
 	id := s.protocolVersion.ClientboundKeepalivePlay()
-	if s.state == stateConfig {
+	if s.state == StateConfig {
 		id = s.protocolVersion.ClientboundKeepaliveConfig()
 	}
 	return s.conn.WritePacket(pk.Marshal(id, pk.Long(challenge)))

@@ -1,3 +1,5 @@
 .idea
 *.exe
 config.yaml
+limbo.yaml
+auth.yaml

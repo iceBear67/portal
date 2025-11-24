@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Tnze/go-mc/chat"
+	"github.com/go-mc/server/auth"
 	"github.com/go-mc/server/limbo"
 	"github.com/go-mc/server/limbo/slp"
 	"github.com/goccy/go-yaml"
@@ -21,6 +22,7 @@ func unwrap[T any](t T, err error) T {
 }
 
 func main() {
+	log.Println("Loading server configuration...")
 	config := loadConfig()
 	log.Println("Loading registry data...")
 	registryMap := limbo.NewRegistryMap()
@@ -37,12 +39,22 @@ func main() {
 	}
 	ctx := context.Background()
 	serv := unwrap(limbo.NewServer(config, registryMap, ctx))
-
+	authConfig := loadAuthServerConfig()
+	authServ := unwrap(auth.NewAuthServer(serv, authConfig))
 	log.Println("Starting server on", config.Listen)
-	err := serv.Start()
+	err := authServ.Start()
 	if err != nil {
 		log.Fatalf("Error running server: %v", err)
 	}
+}
+
+func loadAuthServerConfig() *auth.AuthConfig {
+	config := auth.NewAuthConfig()
+	loadAndUnmarshalOrDefault(config, "auth.yaml")
+	if config.PrivateKey == "" {
+		panic("no private key provided, you can generate one from `openssl genpkey -algorithm Ed25519` or delete the configuration file.")
+	}
+	return config
 }
 
 func loadConfig() *limbo.PortalConfig {
@@ -69,19 +81,7 @@ func loadConfig() *limbo.PortalConfig {
 		Keepalive:    15 * time.Second,
 		RegistryData: make(map[int]string),
 	}
-	if _, err := os.Stat("config.yaml"); os.IsNotExist(err) {
-		bytes := unwrap(yaml.Marshal(config))
-		err := os.WriteFile("config.yaml", bytes, 0600)
-		if err != nil {
-			log.Fatalf("Error creating config.yaml: %v", err)
-		}
-		log.Println("Default configuration has been created.")
-	} else {
-		err := yaml.Unmarshal(unwrap(os.ReadFile("config.yaml")), config)
-		if err != nil {
-			panic(err)
-		}
-	}
+	loadAndUnmarshalOrDefault(config, "limbo.yaml")
 	if config.AuthTimeout <= 0 {
 		config.AuthTimeout = 120 * time.Second
 	}
@@ -100,4 +100,20 @@ func loadConfig() *limbo.PortalConfig {
 		}
 	}
 	return config
+}
+
+func loadAndUnmarshalOrDefault[T interface{}](config T, file string) {
+	if _, err := os.Stat(file); os.IsNotExist(err) {
+		bytes := unwrap(yaml.Marshal(config))
+		err := os.WriteFile(file, bytes, 0600)
+		if err != nil {
+			log.Fatalf("Error creating %v: %v", file, err)
+		}
+		log.Println("Default configuration of", file, "has been created.")
+	} else {
+		err := yaml.Unmarshal(unwrap(os.ReadFile(file)), config)
+		if err != nil {
+			panic(err)
+		}
+	}
 }

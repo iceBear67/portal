@@ -28,7 +28,7 @@ import (
 const verifyTokenLen = 16
 
 // Encrypt a connection, with authentication
-func Encrypt(conn *net.Conn, name string, serverKey *rsa.PrivateKey, auth bool) (*Resp, error) {
+func Encrypt(conn *net.Conn, name string, serverKey *rsa.PrivateKey, auth bool, yggdrasil string) (*Resp, error) {
 	publicKey, err := x509.MarshalPKIXPublicKey(&serverKey.PublicKey)
 	if err != nil {
 		return nil, err
@@ -65,7 +65,7 @@ func Encrypt(conn *net.Conn, name string, serverKey *rsa.PrivateKey, auth bool) 
 	var resp *Resp
 	if auth {
 		hash := authDigest("", SharedSecret, publicKey)
-		resp, err = authentication(name, hash) // auth
+		resp, err = authentication(name, hash, yggdrasil) // auth
 		if err != nil {
 			return nil, errors.New("auth servers down")
 		}
@@ -124,10 +124,8 @@ func encryptionResponse(conn *net.Conn, serverKey *rsa.PrivateKey, verifyToken [
 	return sharedSecret, nil
 }
 
-func authentication(name, hash string) (*Resp, error) {
-	url := "https://sessionserver.mojang.com/session/minecraft/hasJoined?username=" + name + "&serverId=" + hash
-	println(url)
-	resp, err := http.Get("https://sessionserver.mojang.com/session/minecraft/hasJoined?username=" + name + "&serverId=" + hash)
+func authentication(name, hash, yggdrasil string) (*Resp, error) {
+	resp, err := http.Get(yggdrasil + "session/minecraft/hasJoined?username=" + name + "&serverId=" + hash)
 	if err != nil {
 		return nil, err
 	}
