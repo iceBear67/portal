@@ -60,9 +60,9 @@ func (s *PortalConn) ProtocolVersion() ProtocolVersion {
 type ConnectionListener interface {
 	// setup cookies here
 	OnTransfer(conn *PortalConn, target string)
-	OnAuthentication(conn *PortalConn, online bool) (setupLimbo bool)
-	OnLimboJoin(conn *PortalConn)
-	OnPlayerReady(conn *PortalConn)
+	OnAuthentication(conn *PortalConn, enterLimbo func() error, transfer func() error) error
+	OnLimboJoin(conn *PortalConn) error
+	OnPlayerReady(conn *PortalConn) error
 	OnPlayerChat(conn *PortalConn, message string)
 	OnYggdrasilChallenge(conn *PortalConn, playerName string, clientSuggestedId uuid.UUID, privateKey *rsa.PrivateKey) (*Resp, error)
 
@@ -107,15 +107,16 @@ func (s StubListener) OnTransfer(conn *PortalConn, target string) {
 
 }
 
-func (s StubListener) OnAuthentication(conn *PortalConn, online bool) (setupLimbo bool) {
-	return false
+func (s StubListener) OnAuthentication(conn *PortalConn, enterLimbo func() error, transfer func() error) error {
+	return transfer()
 }
 
-func (s StubListener) OnLimboJoin(conn *PortalConn) {
+func (s StubListener) OnLimboJoin(conn *PortalConn) error {
+	return nil
 
 }
-func (s StubListener) OnPlayerReady(conn *PortalConn) {
-
+func (s StubListener) OnPlayerReady(conn *PortalConn) error {
+	return nil
 }
 
 func (s StubListener) OnPlayerChat(conn *PortalConn, message string) {

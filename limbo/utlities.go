@@ -3,6 +3,7 @@ package limbo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -28,6 +29,13 @@ func (s *PortalConn) runKeepAlive(interval time.Duration) {
 			return
 		}
 	}
+}
+
+func (s *PortalConn) TransferDestination() error {
+	if s.destination == "" {
+		return errors.New("no destination")
+	}
+	return s.goTransfer(s.destination)
 }
 
 func (s *PortalConn) goTransfer(serverAddr string) error {

@@ -115,7 +115,7 @@ func (s *Server) Start() error {
 		}
 		go func() {
 			defer s.eventListener.OnDisconnect(&pc)
-			err := pc.startLoginSequence(s.Config.AuthTimeout)
+			err := pc.startLoginSequence(s.Config.AuthTimeout) // todo send disconnect message
 			if err != nil {
 				log.Println("Error from connection", conn.Socket.RemoteAddr(), ":", err)
 			}
@@ -297,54 +297,46 @@ func (s *PortalConn) handleConfiguration() error {
 		return fmt.Errorf("expect login_acknowledged but got %v", pkt.ID)
 	}
 	go s.runKeepAlive(s.server.Config.Keepalive)
-	setupLimbo := s.listener.OnAuthentication(s, s.online)
-	if !setupLimbo {
+
+	setupLimbo := func() error {
+		// start limbo authentication
+		err = s.sendBrand("portal")
+		if err != nil {
+			return err
+		}
+		data, ok := s.server.registryMap.Next(s.protocolVersion)
+		if !ok {
+			return fmt.Errorf("no registry data found for protocol version %v", s.protocolVersion)
+		}
+		_, err = s.conn.Write(data.Value())
+		if err != nil {
+			return err
+		}
+		err = s.sendFinishConfiguration()
+		if err != nil {
+			return err
+		}
+		return s.handlePlay() // transition to play state
+	}
+	goTransfer := func() error {
 		if err := s.goTransfer(s.destination); err != nil {
 			return err
 		}
 		return s.sendFinishConfiguration()
 	}
-
-	// start limbo authentication
-	err = s.sendBrand("portal")
+	err = s.listener.OnAuthentication(s, setupLimbo, goTransfer)
 	if err != nil {
+		log.Println("Cannot authenticate player", s.playerName, "due to err:", err)
+		s.SendDisconnect(chat.Text("Access denied\n\nAn internal error has occurred, please contact the administrator for help. "))
 		return err
 	}
-	data, ok := s.server.registryMap.Next(s.protocolVersion)
-	if !ok {
-		return fmt.Errorf("no registry data found for protocol version %v", s.protocolVersion)
-	}
-	_, err = s.conn.Write(data.Value())
-	if err != nil {
-		return err
-	}
-	err = s.sendFinishConfiguration()
-	if err != nil {
-		return err
-	}
-	return s.handlePlay() // transition to play state
+	return nil
 }
 
 func (s *PortalConn) handlePlay() error {
 	s.listener.OnStateTransition(s, StatePlay)
 	s.state = StatePlay
-	if err := s.handlePlayInitialization(); err != nil {
-		return err
-	}
-	var pkt pk.Packet
-	for {
-		err := s.conn.ReadPacket(&pkt)
-		if err != nil {
-			return err
-		}
-		if int(pkt.ID) == s.protocolVersion.ChatMessage() {
-			msg, err := s.ReadChatMessage(&pkt)
-			if err != nil {
-				return err
-			}
-			s.listener.OnPlayerChat(s, msg)
-		}
-	}
+	return s.handlePlayInitialization()
 }
 
 func (s *PortalConn) handlePlayInitialization() error {
@@ -357,7 +349,10 @@ func (s *PortalConn) handlePlayInitialization() error {
 		}
 		if int(pkt.ID) == s.protocolVersion.FinishConfiguration() && phase == 0 { // finish configuration
 			phase = 1
-			s.listener.OnLimboJoin(s)
+			err = s.listener.OnLimboJoin(s)
+			if err != nil {
+				return err
+			}
 			err = s.sendLoginPlay()
 			if err != nil {
 				return err
@@ -376,8 +371,11 @@ func (s *PortalConn) handlePlayInitialization() error {
 			}
 		} else if int(pkt.ID) == s.protocolVersion.PlayerLoadedJoin() && phase == 1 {
 			phase = 2
-			s.listener.OnPlayerReady(s)
 			log.Println("Player", s.playerName+"/"+s.playerId.String(), "has joined.")
+			err = s.listener.OnPlayerReady(s) //todo log
+			if err != nil {
+				return err
+			}
 			break
 		}
 	}

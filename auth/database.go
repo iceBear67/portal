@@ -77,6 +77,15 @@ func (s *DatabaseAccess) FindByNameUnorder(name string) (*[]UserRecord, error) {
 	return &records, nil
 }
 
+func (s *DatabaseAccess) FindByNameOrId(name string, id uuid.UUID) (*[]UserRecord, error) {
+	records := []UserRecord{}
+	err := s.db.Select(&records, "SELECT * FROM user_record WHERE uuid = ? OR name = ? ORDER BY time ASC", id, name)
+	if err != nil {
+		return nil, err
+	}
+	return &records, nil
+}
+
 func (s *DatabaseAccess) GetPasswordById(id uuid.UUID) (*PasswordRecord, error) {
 	record := PasswordRecord{}
 	err := s.db.Get(&record, "SELECT * FROM password_record WHERE uuid = ?", id)

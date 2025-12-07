@@ -27,7 +27,8 @@ func (s *PortalConn) SendDisconnect(message chat.Message) error {
 	if err != nil {
 		return err
 	}
-	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.DisconnectLogin(), pk.String(disconnectMsg)))
+	_ = s.conn.WritePacket(pk.Marshal(s.protocolVersion.DisconnectLogin(), pk.String(disconnectMsg)))
+	return s.conn.Close()
 }
 
 func (s *PortalConn) sendLoginSuccess(playerUUID pk.UUID, playerName pk.String, properties []user.Property, strictErrorHandling bool) error {
@@ -134,6 +135,20 @@ func (s *PortalConn) ReadChatMessage(pkt *pk.Packet) (string, error) {
 
 func (s *PortalConn) SendChatMessage(ch chat.Message, overlay bool) error {
 	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.SystemMessage(), ch, pk.Boolean(overlay)))
+}
+
+func (s *PortalConn) SendTitle(ch *chat.Message, subt *chat.Message) error {
+	var err error
+	if ch != nil {
+		err = s.conn.WritePacket(pk.Marshal(s.protocolVersion.SetTitle(), *ch))
+	}
+	if err != nil {
+		return err
+	}
+	if subt != nil {
+		return s.conn.WritePacket(pk.Marshal(s.protocolVersion.SetTitleSub(), *subt))
+	}
+	return nil
 }
 
 func sendHandshakePacket(conn *net.Conn, protocolVersion int, serverAddress string, serverPort int, nextState int) error {

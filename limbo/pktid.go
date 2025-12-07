@@ -67,3 +67,7 @@ func (s ProtocolVersion) ChatMessage() int {
 func (s ProtocolVersion) SystemMessage() int {
 	return 0x72
 }
+
+func (s ProtocolVersion) SetTitle() int { return 0x70 }
+
+func (s ProtocolVersion) SetTitleSub() int { return 0x6e }

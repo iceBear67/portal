@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"fmt"
 
 	"github.com/go-mc/server/limbo"
 	"github.com/jmoiron/sqlx"
@@ -30,6 +31,11 @@ func NewAuthServer(server *limbo.Server, config *AuthConfig) (*AuthServer, error
 	writer, err := createWriter(db, server.Ctx())
 	if err != nil {
 		return nil, err
+	}
+	for k := range config.YggdrasilServers {
+		if k == "offline" {
+			return nil, fmt.Errorf("yggdrasil server cannot be named 'offline'")
+		}
 	}
 	return &AuthServer{
 		server:        server,
