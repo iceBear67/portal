@@ -238,6 +238,7 @@ func (s *PortalConn) handleLogin() error {
 	// check host and destination, otherwise reject.
 	fallback := s.server.Config.FallbackServer
 	destination, ok := s.server.Config.Servers[s.requestedHost]
+	s.destination = destination
 	if !ok {
 		if fallback != "" {
 			s.destination = fallback
@@ -246,8 +247,6 @@ func (s *PortalConn) handleLogin() error {
 			_ = s.SendDisconnect(chat.Text("Hey! A valid server address must be provided.\n Please check the server IP carefully!"))
 			return fmt.Errorf("disconnected for unknown destination")
 		}
-	} else {
-		s.destination = destination
 	}
 	var (
 		playerName pk.String
@@ -260,9 +259,12 @@ func (s *PortalConn) handleLogin() error {
 	s.playerName = string(playerName)
 	var theoryOfflineId = offline.NameToUUID(string(playerName))
 	s.online = theoryOfflineId != uuid.UUID(clientSuggestId)
+	if err = s.listener.OnServerNameIndicated(s, s.requestedHost); err != nil {
+		return err
+	}
 	// Try to authenticate with Mojang
 	if s.online {
-		log.Println("Authenticating", playerName, "with connection encryption")
+		log.Println("Authenticating", playerName, "with yggdrasil...")
 		var resp *Resp
 		if resp, err = s.listener.OnYggdrasilChallenge(s, string(playerName), uuid.UUID(clientSuggestId), s.server.PrivateKey); err != nil {
 			return err
@@ -280,7 +282,7 @@ func (s *PortalConn) handleLogin() error {
 		if err != nil {
 			return err
 		}
-		log.Println("Try authenticating", playerName, "with user/pass")
+		log.Println("Player", playerName, "joined with offline mode.")
 	}
 	return s.handleConfiguration()
 }

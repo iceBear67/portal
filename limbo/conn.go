@@ -3,6 +3,7 @@ package limbo
 import (
 	"context"
 	"crypto/rsa"
+	"log"
 
 	"github.com/Tnze/go-mc/net"
 	"github.com/google/uuid"
@@ -58,6 +59,7 @@ func (s *PortalConn) ProtocolVersion() ProtocolVersion {
 }
 
 type ConnectionListener interface {
+	Init(conn *PortalConn) error
 	// setup cookies here
 	OnTransfer(conn *PortalConn, target string)
 	OnAuthentication(conn *PortalConn, enterLimbo func() error, transfer func() error) error
@@ -65,12 +67,17 @@ type ConnectionListener interface {
 	OnPlayerReady(conn *PortalConn) error
 	OnPlayerChat(conn *PortalConn, message string)
 	OnYggdrasilChallenge(conn *PortalConn, playerName string, clientSuggestedId uuid.UUID, privateKey *rsa.PrivateKey) (*Resp, error)
+	OnServerNameIndicated(conn *PortalConn, serverName string) error
 
 	OnStateTransition(conn *PortalConn, newState int)
 	OnDisconnect(conn *PortalConn)
 }
 
 func (c *PortalConn) SetupListener(l ConnectionListener) {
+	if err := l.Init(c); err != nil {
+		log.Println("Failed to init connection listener", l, ":", err)
+		return
+	}
 	c.listener = l
 }
 
@@ -91,6 +98,14 @@ func (c *PortalConn) Connection() *net.Conn {
 }
 
 type StubListener int
+
+func (s StubListener) Init(conn *PortalConn) error {
+	return nil
+}
+
+func (s StubListener) OnServerNameIndicated(conn *PortalConn, serverName string) error {
+	return nil
+}
 
 func (s StubListener) OnYggdrasilChallenge(conn *PortalConn, playerName string, clientSuggestion uuid.UUID, privateKey *rsa.PrivateKey) (*Resp, error) {
 	return Encrypt(conn.conn, playerName, privateKey, true, "https://sessionserver.mojang.com/")

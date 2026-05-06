@@ -44,19 +44,11 @@ type PasswordRecord struct {
 }
 
 type DatabaseAccess struct {
-	db *sqlx.Tx
+	db *sqlx.DB
 }
 
 func Access(db *sqlx.DB) (*DatabaseAccess, error) {
-	tx, err := db.Beginx()
-	if err != nil {
-		return nil, err
-	}
-	return &DatabaseAccess{db: tx}, nil
-}
-
-func (s *DatabaseAccess) Commit() error {
-	return s.db.Commit()
+	return &DatabaseAccess{db: db}, nil
 }
 
 func (s *DatabaseAccess) FindById(id uuid.UUID) (*[]UserRecord, error) {

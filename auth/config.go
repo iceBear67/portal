@@ -16,10 +16,6 @@ type AuthConfig struct {
 	YggdrasilBypass bool `yaml:"yggdrasil-bypass"`
 	// Bypass limbo authentication for offline players
 	OfflineBypass bool `yaml:"offline-bypass"`
-	// If yggdrasil authentication is failed, should they join limbo to perform user/pass ?
-	// Once the user/pass authentication is passed they got their yggdrasil uuid to join servers.
-	// Yggdrasil fallback players have different UUID with the same-name offline players.
-	YggdrasilFallback bool `yaml:"yggdrasil-fallback"`
 	// Should we only allow the first player that use this name to authenticate?
 	AllowNameCollision bool `yaml:"allow-name-collision"`
 	// Should we allow registration for new users?
@@ -46,7 +42,6 @@ func NewAuthConfig() *AuthConfig {
 		},
 		YggdrasilBypass:    true,
 		OfflineBypass:      false,
-		YggdrasilFallback:  false,
 		AllowNameCollision: false,
 		OpenRegistration:   true,
 		Database: DatabaseConfig{

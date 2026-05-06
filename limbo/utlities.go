@@ -36,6 +36,7 @@ func (s *PortalConn) TransferDestination() error {
 		return errors.New("no destination")
 	}
 	return s.goTransfer(s.destination)
+	//todo send stage end there
 }
 
 func (s *PortalConn) goTransfer(serverAddr string) error {

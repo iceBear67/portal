@@ -11,7 +11,6 @@ import (
 
 	"github.com/Tnze/go-mc/chat"
 	pk "github.com/Tnze/go-mc/net/packet"
-	"github.com/Tnze/go-mc/yggdrasil/user"
 	"github.com/go-mc/server/limbo"
 	"github.com/google/uuid"
 )
@@ -19,8 +18,32 @@ import (
 type AuthConnHandler struct {
 	server           *AuthServer
 	authSource       string
-	fallback         bool
 	needRegistration bool
+	authListener     AuthenticatedListener
+}
+
+type AuthenticatedListener interface {
+	// OnAuthenticateResult when err is present, no guarantee of existence or integrity of player information.
+	// AuthConnHandler continue executing the default behavior if no error is returned.
+	OnAuthenticateResult(conn *limbo.PortalConn, err error) error
+}
+
+func (s *AuthConnHandler) Init(conn *limbo.PortalConn) error {
+	s.authListener = s
+	return nil
+}
+
+// todo refactor other kick logics to here.
+func (s *AuthConnHandler) OnAuthenticateResult(conn *limbo.PortalConn, err error) error {
+	return nil
+}
+
+func (s *AuthConnHandler) OnServerNameIndicated(conn *limbo.PortalConn, serverName string) error {
+	v, ok := s.server.bindingPlayers[serverName] // todo did you trim the name?
+	if ok {
+		s.authListener = &BindConnHandler{authConn: s, bindTarget: v}
+	}
+	return nil
 }
 
 func (s *AuthConnHandler) OnTransfer(conn *limbo.PortalConn, target string) {
@@ -28,23 +51,22 @@ func (s *AuthConnHandler) OnTransfer(conn *limbo.PortalConn, target string) {
 }
 
 func (s *AuthConnHandler) OnAuthentication(conn *limbo.PortalConn, sendLimbo func() error, transfer func() error) error {
-	// We've used some hacks to allow yggdrasil fallback, so double check here.
-	online := conn.Online() && !s.fallback
+	online := conn.Online()
 	if (online && s.server.config.YggdrasilBypass) ||
 		(!online && s.server.config.OfflineBypass) {
+		if err := s.authListener.OnAuthenticateResult(conn, nil); err != nil {
+			return err
+		}
 		return transfer()
 	}
 	source := s.authSource
-	if s.fallback {
-		source = "" // treat as offline authentication.
-	}
 	db, err := Access(s.server.database)
 	if err != nil {
-		return err
+		return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 	}
 	_result, err := db.FindById(*conn.PlayerId())
 	if err != nil {
-		return err
+		return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 	}
 	result := *_result
 
@@ -59,21 +81,26 @@ func (s *AuthConnHandler) OnAuthentication(conn *limbo.PortalConn, sendLimbo fun
 		}
 	}
 	// rule 2: same uuid but source, reject until registration.
-	for _, r := range result {
-		if r.Source == source {
-			return transfer()
+	if online {
+		for _, r := range result {
+			if r.Source == source {
+				return transfer()
+			}
 		}
+	} else {
+		return sendLimbo()
 	}
 	//todo i18n
-	return conn.SendDisconnect(chat.Text(`
+	return errors.Join(s.authListener.OnAuthenticateResult(conn, errors.New("uuid conflict")), conn.SendDisconnect(chat.Text(`
 - Access Denied -
 
 Another player %v has registered from %v with the same UUID.
 If you're this player, please login the authentication server %v with account from %v
 So we can confirm they are you.
-`))
+`)))
 }
 
+// Automatically register new accounts for online players.
 func (s *AuthConnHandler) handleOnlineEarlyRegister(conn *limbo.PortalConn, sendLimbo func() error, transfer func() error) error {
 	ctx, cancel := context.WithCancel(s.server.server.Ctx())
 	var finalErr error
@@ -90,9 +117,11 @@ func (s *AuthConnHandler) handleOnlineEarlyRegister(conn *limbo.PortalConn, send
 				finalErr = fmt.Errorf(
 					"failed to register account for yggdrasil player %v (from %v): %v",
 					conn.PlayerName(), s.authSource, err)
-				// todo fallback to user duplication logic.
+				//user duplication or database error.
+				_ = conn.SendDisconnect(chat.Text("An unexpected error has occurred. Contact administrator for help"))
 				return
 			}
+			log.Println("automatically registered account for yggdrasil player", conn.PlayerName(), "from", s.authSource)
 			finalErr = transfer()
 		},
 	}
@@ -116,12 +145,10 @@ func (s *AuthConnHandler) OnLimboJoin(conn *limbo.PortalConn) error {
 func (s *AuthConnHandler) OnPlayerReady(conn *limbo.PortalConn) error {
 	// situation 0. register
 	if !s.server.config.OpenRegistration {
-		return fmt.Errorf("the server hasn't open registration")
+		err := fmt.Errorf("the server hasn't open registration")
+		return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 	}
 	if s.needRegistration {
-		if s.fallback {
-			return fmt.Errorf("yggdrasil players aren't allowed to register account")
-		}
 		return s.initiateRegistrationFlow(conn)
 	}
 	// situation > 0: offline login.
@@ -130,11 +157,11 @@ func (s *AuthConnHandler) OnPlayerReady(conn *limbo.PortalConn) error {
 	// anyway the uuid is right :)
 	access, err := Access(s.server.database)
 	if err != nil {
-		return err
+		return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 	}
 	pwdR, err := access.GetPasswordById(*conn.PlayerId())
 	if err != nil { //todo more detailed err: user not exist
-		return err
+		return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 	}
 	var pkt pk.Packet
 	msg := chat.Text("Login")
@@ -143,7 +170,7 @@ func (s *AuthConnHandler) OnPlayerReady(conn *limbo.PortalConn) error {
 
 	passwordWrongCounter := 0
 	if err != nil {
-		return err
+		return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 	}
 	for {
 		err := conn.Connection().ReadPacket(&pkt)
@@ -153,12 +180,14 @@ func (s *AuthConnHandler) OnPlayerReady(conn *limbo.PortalConn) error {
 		if int(pkt.ID) == conn.ProtocolVersion().ChatMessage() {
 			msg, e := conn.ReadChatMessage(&pkt)
 			if e != nil {
-				return e
+				return errors.Join(e, s.authListener.OnAuthenticateResult(conn, e))
 			}
 			if !ValidatePassword(strings.Trim(msg, " "), []byte(pwdR.Password)) {
 				chat.Text("Incorrect password, please try again later.")
 				passwordWrongCounter += 1
+				// todo integrate with security features, like rate limiter.
 				if passwordWrongCounter >= 3 {
+					_ = s.authListener.OnAuthenticateResult(conn, errors.New("invalid password"))
 					return conn.SendDisconnect(chat.Text("Too many wrong tries."))
 				}
 				continue
@@ -192,17 +221,7 @@ func (s *AuthConnHandler) OnYggdrasilChallenge(
 		s.authSource = source
 		return resp, nil
 	}
-	if s.server.config.YggdrasilFallback {
-		s.fallback = true
-		//todo dangerous operation, check the login flow
-		log.Println("User", playerName, "failed to pass yggdrasil, falling back to user/pass authentication.")
-		prop := []user.Property{{Name: "textures", Value: conn.Server().Config.DefaultSkin}}
-		return &limbo.Resp{
-			Name:       playerName,
-			ID:         clientSuggestedId,
-			Properties: prop,
-		}, nil
-	}
+	_ = s.authListener.OnAuthenticateResult(conn, errors.New("no available yggdrasil server"))
 	return nil, fmt.Errorf("no auth servers available")
 }
 
@@ -217,16 +236,16 @@ func (s *AuthConnHandler) initiateRegistrationFlow(conn *limbo.PortalConn) error
 	_ = conn.SendTitle(&msg, &subT)
 	for {
 		if err := conn.Connection().ReadPacket(&pkt); err != nil {
-			return err
+			return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 		}
 		if int(pkt.ID) == conn.ProtocolVersion().ChatMessage() {
 			msg, e := conn.ReadChatMessage(&pkt)
 			if e != nil {
-				return e
+				return errors.Join(e, s.authListener.OnAuthenticateResult(conn, e))
 			}
 			// todo trim
 			if err := conn.SendChatMessage(chat.Text("Confirm your password by sending it again"), false); err != nil {
-				return err
+				return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 			}
 			if err := conn.Connection().ReadPacket(&pkt); err != nil {
 				return err
@@ -237,12 +256,12 @@ func (s *AuthConnHandler) initiateRegistrationFlow(conn *limbo.PortalConn) error
 			}
 			if msg != msg2 {
 				if err := conn.SendChatMessage(chat.Text("Password mismatch. You may try your password again."), false); err != nil {
-					return err
+					return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 				}
 				continue
 			}
 			if err := conn.SendChatMessage(chat.Text("Registering your account, please wait."), false); err != nil {
-				return err
+				return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 			}
 			// register
 			regCtx, cancelFn := context.WithCancel(conn.Context())
@@ -251,7 +270,7 @@ func (s *AuthConnHandler) initiateRegistrationFlow(conn *limbo.PortalConn) error
 					Name:         conn.PlayerName(),
 					Id:           *conn.PlayerId(),
 					RegisterTime: time.Now(),
-					Source:       s.authSource, // todo be aware of yggdrasil fallback here
+					Source:       s.authSource,
 				},
 				callback: func(err error) {
 					defer cancelFn()

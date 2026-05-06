@@ -39,7 +39,7 @@ func (m *RegistryMap) Put(version int, data []byte) {
 func (m *RegistryMap) Next(version ProtocolVersion) (*RegistryData, bool) {
 	data := *m.data
 	i := sort.Search(len(data), func(i int) bool {
-		return data[i].protocolVersion > version
+		return data[i].protocolVersion >= version
 	})
 	if i < len(data) {
 		return &data[i], true
