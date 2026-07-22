@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS user_record (
 CREATE TABLE IF NOT EXISTS password_record (
     "index"     INTEGER PRIMARY KEY,
     uuid        TEXT UNIQUE NOT NULL,
-    password    TEXT NOT NULL,
+    password    BLOB NOT NULL,
     FOREIGN KEY (uuid) REFERENCES user_record(uuid)
 );
 `
@@ -40,15 +40,15 @@ type UserRecord struct {
 type PasswordRecord struct {
 	Index    int64     `db:"index"`
 	Id       uuid.UUID `db:"uuid"`
-	Password string    `db:"password"`
+	Password []byte    `db:"password"`
 }
 
 type DatabaseAccess struct {
-	db *sqlx.DB
+	db *sqlx.Tx
 }
 
-func Access(db *sqlx.DB) (*DatabaseAccess, error) {
-	return &DatabaseAccess{db: db}, nil
+func Access(db *sqlx.Tx) *DatabaseAccess {
+	return &DatabaseAccess{db: db}
 }
 
 func (s *DatabaseAccess) FindById(id uuid.UUID) (*[]UserRecord, error) {
@@ -87,6 +87,18 @@ func (s *DatabaseAccess) GetPasswordById(id uuid.UUID) (*PasswordRecord, error) 
 	return &record, nil
 }
 
+func (s *DatabaseAccess) SetPassword(id uuid.UUID, password string) error {
+	pwd, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec("INSERT INTO password_record (uuid, password) VALUES (?, ?)", id, pwd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *DatabaseAccess) TryRegister(record UserRecord) error {
 	var count int
 	err := s.db.Get(&count, "SELECT COUNT(*) FROM user_record WHERE uuid = ?", record.Id)
@@ -104,13 +116,13 @@ func (s *DatabaseAccess) TryRegister(record UserRecord) error {
 	return nil
 }
 
-type RegisterRequest struct {
-	record   UserRecord
+type DatabaseOp struct {
+	action   func(s *DatabaseAccess) error
 	callback func(err error)
 }
 
-func createWriter(db *sqlx.DB, ctx context.Context) (chan *RegisterRequest, error) {
-	ch := make(chan *RegisterRequest, 16)
+func createWriter(db *sqlx.DB, ctx context.Context) (chan *DatabaseOp, error) {
+	ch := make(chan *DatabaseOp, 16)
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -119,11 +131,14 @@ func createWriter(db *sqlx.DB, ctx context.Context) (chan *RegisterRequest, erro
 	}()
 	go func() {
 		for req := range ch {
-			acc, err := Access(db)
+			tx, err := db.Beginx()
 			if err != nil {
-				log.Println("Failed to access database.")
+				log.Println("Failed to access database!")
+				req.callback(err)
+				continue
 			}
-			err = acc.TryRegister(req.record)
+			acc := Access(tx)
+			err = errors.Join(req.action(acc), tx.Commit())
 			req.callback(err)
 		}
 	}()

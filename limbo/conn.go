@@ -28,6 +28,9 @@ type PortalConn struct {
 	conn     *net.Conn
 	ctx      context.Context
 	listener ConnectionListener
+
+	// prevent multiple disconnection
+	_disconnected bool
 }
 
 func (s *PortalConn) Server() *Server {
@@ -42,7 +45,7 @@ func (s *PortalConn) PlayerName() string {
 	return s.playerName
 }
 
-func (s *PortalConn) Online() bool {
+func (s *PortalConn) IsUserOnline() bool {
 	return s.online
 }
 

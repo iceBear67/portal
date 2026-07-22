@@ -23,6 +23,11 @@ func (s *PortalConn) sendPingResponse(pkt *pk.Packet) error {
 }
 
 func (s *PortalConn) SendDisconnect(message chat.Message) error {
+	if s._disconnected {
+		return nil
+	}
+	s._disconnected = true
+
 	disconnectMsg, err := json.Marshal(message)
 	if err != nil {
 		return err

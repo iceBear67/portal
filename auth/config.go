@@ -14,14 +14,13 @@ type AuthConfig struct {
 	YggdrasilServers map[string]string `yaml:"yggdrasil-servers"`
 	// Bypass limbo authentication for yggdrasil authenticated players.
 	YggdrasilBypass bool `yaml:"yggdrasil-bypass"`
-	// Bypass limbo authentication for offline players
-	OfflineBypass bool `yaml:"offline-bypass"`
 	// Should we only allow the first player that use this name to authenticate?
 	AllowNameCollision bool `yaml:"allow-name-collision"`
 	// Should we allow registration for new users?
 	// If not, they will be asked for an invitation code, which can be generated from console.
-	OpenRegistration bool           `yaml:"open-registration"`
-	Database         DatabaseConfig `yaml:"database"`
+	OpenRegistration       bool           `yaml:"open-registration"`
+	StrictSourceValidation bool           `yaml:"strict-source-validation"`
+	Database               DatabaseConfig `yaml:"database"`
 }
 
 type DatabaseConfig struct {
@@ -41,7 +40,6 @@ func NewAuthConfig() *AuthConfig {
 			"mojang": "https://sessionserver.mojang.com/",
 		},
 		YggdrasilBypass:    true,
-		OfflineBypass:      false,
 		AllowNameCollision: false,
 		OpenRegistration:   true,
 		Database: DatabaseConfig{

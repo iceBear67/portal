@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"time"
 
 	"github.com/Tnze/go-mc/chat"
@@ -224,6 +225,8 @@ func (s *PortalConn) handleStatus() error {
 	}
 }
 
+var playerNamePattern = regexp.MustCompile("^[A-Za-z0-9_]{3,16}$")
+
 func (s *PortalConn) handleLogin() error {
 	s.listener.OnStateTransition(s, StateLogin)
 	s.state = StateLogin
@@ -257,6 +260,9 @@ func (s *PortalConn) handleLogin() error {
 		return err
 	}
 	s.playerName = string(playerName)
+	if !playerNamePattern.MatchString(s.playerName) {
+		return fmt.Errorf("invalid player name '%v'", s.playerName)
+	}
 	var theoryOfflineId = offline.NameToUUID(string(playerName))
 	s.online = theoryOfflineId != uuid.UUID(clientSuggestId)
 	if err = s.listener.OnServerNameIndicated(s, s.requestedHost); err != nil {

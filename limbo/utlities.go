@@ -40,7 +40,10 @@ func (s *PortalConn) TransferDestination() error {
 }
 
 func (s *PortalConn) goTransfer(serverAddr string) error {
-	// set cookies...todo
+	// set cookies... should be done by downstream connection implementations.
+	if s.state != StateConfig && s.state != StatePlay {
+		return errors.New("invalid state invoking transfer")
+	}
 	log.Println("Redirecting", s.playerId, "to", serverAddr)
 	s.listener.OnTransfer(s, serverAddr)
 	split := strings.Split(serverAddr, ":")

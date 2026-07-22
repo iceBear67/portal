@@ -6,19 +6,17 @@ import (
 	"fmt"
 
 	"github.com/go-mc/server/limbo"
-	"github.com/google/uuid"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type AuthServer struct {
-	server         *limbo.Server
-	config         *AuthConfig
-	registerQueue  chan *RegisterRequest
-	database       *sqlx.DB
-	privateKey     ed25519.PrivateKey
-	publicKey      ed25519.PublicKey
-	bindingPlayers map[string]uuid.UUID
+	server        *limbo.Server
+	config        *AuthConfig
+	registerQueue chan *DatabaseOp
+	database      *sqlx.DB
+	privateKey    ed25519.PrivateKey
+	publicKey     ed25519.PublicKey
 }
 
 func NewAuthServer(server *limbo.Server, config *AuthConfig) (*AuthServer, error) {
