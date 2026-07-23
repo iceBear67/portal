@@ -13,6 +13,8 @@ import (
 	pk "github.com/Tnze/go-mc/net/packet"
 	"github.com/go-mc/server/limbo"
 	"github.com/google/uuid"
+	"github.com/icebear67/mfp-go"
+	"github.com/icebear67/mfp-go/pip"
 )
 
 type AuthConnHandler struct {
@@ -36,8 +38,8 @@ func (s *AuthConnHandler) Init(conn *limbo.PortalConn) error {
 	return nil
 }
 
-// todo refactor other kick logics to here.
 func (s *AuthConnHandler) OnAuthenticateResult(conn *limbo.PortalConn, err error) error {
+	_ = conn.SendDisconnect(chat.Text(err.Error()))
 	return err
 }
 
@@ -45,8 +47,52 @@ func (s *AuthConnHandler) OnServerNameIndicated(conn *limbo.PortalConn, serverNa
 	return nil
 }
 
-func (s *AuthConnHandler) OnTransfer(conn *limbo.PortalConn, target string) {
-
+func (s *AuthConnHandler) OnTransfer(conn *limbo.PortalConn, target string, port int) {
+	// set info
+	dest := conn.Destination()
+	if dest == nil {
+		_ = s.OnAuthenticateResult(conn, fmt.Errorf("unknown destination"))
+		return
+	}
+	id := mfp.Identity{
+		PrivateKey: s.server.privateKey,
+	}
+	rt, err := pip.Issue(&id, pip.TokenParams{
+		Target:  mfp.PublicKey(dest.PublicKey),
+		Subject: conn.PlayerId()[:],
+		Profile: &pip.PlayerProfile{
+			Name:       conn.PlayerName(),
+			Texture:    nil,
+			Cape:       nil,
+			Extensions: nil,
+		},
+		Time:  time.Now(),
+		Until: time.Now().Add(time.Minute * 1),
+	})
+	if err != nil {
+		log.Printf("Error issuing token for %v: %v", conn.PlayerId().String(), err)
+		_ = s.OnAuthenticateResult(conn, fmt.Errorf("cannot issue transfer packet"))
+		return
+	}
+	bytes, err := rt.Marshal()
+	if err != nil {
+		log.Printf("Error issuing token for %v: %v", conn.PlayerId().String(), err)
+		_ = s.OnAuthenticateResult(conn, fmt.Errorf("cannot marshal transfer packet"))
+		return
+	}
+	cookies, err := pip.Chunk("pip:redirect", bytes)
+	if err != nil {
+		log.Printf("Error issuing token for %v: %v", conn.PlayerId().String(), err)
+		_ = s.OnAuthenticateResult(conn, fmt.Errorf("cannot issue redirect packet"))
+		return
+	}
+	for k, v := range cookies {
+		err = conn.SetCookie(k, v)
+		if err != nil {
+			_ = s.OnAuthenticateResult(conn, fmt.Errorf("cannot set cookie %v", k))
+			return
+		}
+	}
 }
 
 func (s *AuthConnHandler) OnAuthentication(conn *limbo.PortalConn, sendLimbo func() error, transfer func() error) error {
@@ -189,7 +235,6 @@ func (s *AuthConnHandler) initiateRegistrationFlow(conn *limbo.PortalConn) error
 			if e != nil {
 				return errors.Join(e, s.authListener.OnAuthenticateResult(conn, e))
 			}
-			// todo trim
 			if err := conn.SendChatMessage(chat.Text("Confirm your password by sending it again"), false); err != nil {
 				return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 			}

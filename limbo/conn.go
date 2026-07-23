@@ -7,6 +7,8 @@ import (
 
 	"github.com/Tnze/go-mc/net"
 	"github.com/google/uuid"
+	"github.com/icebear67/mfp-go/pip"
+	"github.com/icebear67/mfp-go/rtdp"
 )
 
 type PortalConn struct {
@@ -21,7 +23,7 @@ type PortalConn struct {
 
 	// not valid until handshake complete
 	requestedHost   string
-	destination     string
+	destination     *ServerConfig
 	protocolVersion ProtocolVersion
 
 	// always available
@@ -53,7 +55,7 @@ func (s *PortalConn) RequestedHost() string {
 	return s.requestedHost
 }
 
-func (s *PortalConn) Destination() string {
+func (s *PortalConn) Destination() *ServerConfig {
 	return s.destination
 }
 
@@ -64,7 +66,7 @@ func (s *PortalConn) ProtocolVersion() ProtocolVersion {
 type ConnectionListener interface {
 	Init(conn *PortalConn) error
 	// setup cookies here
-	OnTransfer(conn *PortalConn, target string)
+	OnTransfer(conn *PortalConn, target string, port int)
 	OnAuthentication(conn *PortalConn, enterLimbo func() error, transfer func() error) error
 	OnLimboJoin(conn *PortalConn) error
 	OnPlayerReady(conn *PortalConn) error
@@ -100,6 +102,28 @@ func (c *PortalConn) Connection() *net.Conn {
 	return c.conn
 }
 
+func (s *PortalConn) handleRtdpQuery() error {
+	session, err := rtdp.Accept(s.conn, rtdp.Config{
+		Identity: s.server.Identity,
+		Known:    s.server.Known,
+	})
+	if err != nil {
+		return err
+	}
+	for {
+		arrived, err := session.ReadPacket()
+		if err != nil {
+			return err
+		}
+		if p, ok := arrived.(*rtdp.PeerPayload); ok && p.Action == pip.ActionArrive {
+			err = session.Acknowledge(p.TransactionID, "")
+			if err != nil {
+				return err
+			}
+		}
+	}
+}
+
 type StubListener int
 
 func (s StubListener) Init(conn *PortalConn) error {
@@ -121,7 +145,7 @@ func (s StubListener) OnNewConnection(conn *PortalConn) bool {
 func (s StubListener) OnDisconnect(conn *PortalConn) {
 }
 
-func (s StubListener) OnTransfer(conn *PortalConn, target string) {
+func (s StubListener) OnTransfer(conn *PortalConn, target string, port int) {
 
 }
 

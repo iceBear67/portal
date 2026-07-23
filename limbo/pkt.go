@@ -2,6 +2,7 @@ package limbo
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/Tnze/go-mc/chat"
 	"github.com/Tnze/go-mc/net"
@@ -34,6 +35,19 @@ func (s *PortalConn) SendDisconnect(message chat.Message) error {
 	}
 	_ = s.conn.WritePacket(pk.Marshal(s.protocolVersion.DisconnectLogin(), pk.String(disconnectMsg)))
 	return s.conn.Close()
+}
+
+func (s *PortalConn) SetCookie(key string, value []byte) error {
+	if len(value) > 5120 {
+		return fmt.Errorf("cookie value too large (%v > 5120)", len(value))
+	}
+	pktId := s.protocolVersion.StoreCookieConfig()
+	if s.state == StatePlay {
+		pktId = s.protocolVersion.StoreCookiePlay()
+	}
+	return s.conn.WritePacket(pk.Marshal(
+		pktId, pk.Identifier(key), pk.ByteArray(value),
+	))
 }
 
 func (s *PortalConn) sendLoginSuccess(playerUUID pk.UUID, playerName pk.String, properties []user.Property, strictErrorHandling bool) error {

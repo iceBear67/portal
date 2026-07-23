@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Tnze/go-mc/net"
@@ -32,29 +30,20 @@ func (s *PortalConn) runKeepAlive(interval time.Duration) {
 }
 
 func (s *PortalConn) TransferDestination() error {
-	if s.destination == "" {
+	if s.destination == nil {
 		return errors.New("no destination")
 	}
-	return s.goTransfer(s.destination)
-	//todo send stage end there
+	return s.goTransfer(s.destination.DestinationHost, s.destination.DestinationPort)
 }
 
-func (s *PortalConn) goTransfer(serverAddr string) error {
+func (s *PortalConn) goTransfer(serverHost string, serverPort int) error {
 	// set cookies... should be done by downstream connection implementations.
 	if s.state != StateConfig && s.state != StatePlay {
 		return errors.New("invalid state invoking transfer")
 	}
-	log.Println("Redirecting", s.playerId, "to", serverAddr)
-	s.listener.OnTransfer(s, serverAddr)
-	split := strings.Split(serverAddr, ":")
-	if len(split) != 2 {
-		return fmt.Errorf("invalid server address, expect host:port %v", serverAddr)
-	}
-	port, err := strconv.Atoi(split[1])
-	if err != nil {
-		return err
-	}
-	if err := s.SendTransfer(split[0], port); err != nil {
+	log.Println("Redirecting", s.playerId, "to", serverHost)
+	s.listener.OnTransfer(s, serverHost, serverPort)
+	if err := s.SendTransfer(serverHost, serverPort); err != nil {
 		return err
 	}
 	// waiting for transfer
@@ -66,8 +55,8 @@ func (s *PortalConn) goTransfer(serverAddr string) error {
 	}
 }
 
-func HarvestStatus(serverAddr string, ctx context.Context, timeout time.Duration) (*slp.ServerListPing, error) {
-	conn, err := net.DialMCTimeout(serverAddr, timeout)
+func HarvestStatus(serverAddr *ServerConfig, ctx context.Context, timeout time.Duration) (*slp.ServerListPing, error) {
+	conn, err := net.DialMCTimeout(fmt.Sprintf("%v:%v", serverAddr.DestinationHost, serverAddr.DestinationPort), timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -80,12 +69,7 @@ func HarvestStatus(serverAddr string, ctx context.Context, timeout time.Duration
 	defer func() {
 		conn.Close()
 	}()
-	arr := strings.Split(serverAddr, ":")
-	port, err := strconv.Atoi(arr[1])
-	if err != nil {
-		port = 25565
-	}
-	err = sendHandshakePacket(conn, 0, arr[0], port, 1)
+	err = sendHandshakePacket(conn, 0, serverAddr.DestinationHost, serverAddr.DestinationPort, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -112,4 +96,12 @@ func HarvestStatus(serverAddr string, ctx context.Context, timeout time.Duration
 		return nil, err
 	}
 	return &r, nil
+}
+
+func Map[T, V any](ts []T, fn func(T) V) []V {
+	result := make([]V, len(ts))
+	for i, t := range ts {
+		result[i] = fn(t)
+	}
+	return result
 }

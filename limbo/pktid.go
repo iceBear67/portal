@@ -12,6 +12,10 @@ func (s ProtocolVersion) LoginSuccess() int {
 	return 0x02
 }
 
+func (s ProtocolVersion) StoreCookiePlay() int { return 0x78 }
+
+func (s ProtocolVersion) StoreCookieConfig() int { return 0xA }
+
 func (s ProtocolVersion) FinishConfiguration() int {
 	return 0x03
 }

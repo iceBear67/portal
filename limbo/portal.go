@@ -2,11 +2,13 @@ package limbo
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"regexp"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/Tnze/go-mc/yggdrasil/user"
 	"github.com/go-mc/server/limbo/slp"
 	"github.com/google/uuid"
+	"github.com/icebear67/mfp-go"
 	"github.com/patrickmn/go-cache"
 	"github.com/werbenhu/eventbus"
 )
@@ -27,6 +30,8 @@ type Server struct {
 	Config        *PortalConfig
 	cachedInfo    *cache.Cache
 	PrivateKey    *rsa.PrivateKey
+	Known         *mfp.KeySet
+	Identity      *mfp.Identity
 	registryMap   *RegistryMap
 	eventBus      *eventbus.EventBus
 	eventListener EventListenerHost
@@ -56,8 +61,15 @@ func NewServer(config *PortalConfig, registry *RegistryMap, ctx context.Context)
 	if err != nil {
 		return nil, err
 	}
+	keys := make([]mfp.PublicKey, 4)
+	for i := range maps.Values(config.Servers) {
+		keys = append(keys, mfp.PublicKey(i.PublicKey))
+	}
+	keySet := mfp.NewKeySet(keys...)
 	server := &Server{
 		Config:        config,
+		Known:         keySet,
+		Identity:      &mfp.Identity{PrivateKey: ed25519.PrivateKey(config.PrivateKey)},
 		cachedInfo:    cache.New(config.CacheInvalidate, 5*time.Second),
 		ctx:           ctx,
 		PrivateKey:    privKey,
@@ -182,6 +194,8 @@ func (s *PortalConn) handleHandshake() error {
 		return s.handleStatus()
 	case pk.VarInt(2):
 		return s.handleLogin()
+	case pk.VarInt(127):
+		return s.handleRtdpQuery()
 	default: // todo transfer
 		return fmt.Errorf("transfer intent not supported")
 	}
@@ -243,8 +257,12 @@ func (s *PortalConn) handleLogin() error {
 	destination, ok := s.server.Config.Servers[s.requestedHost]
 	s.destination = destination
 	if !ok {
+		fallbackServer, ok := s.server.Config.Servers[fallback]
 		if fallback != "" {
-			s.destination = fallback
+			if !ok {
+				return fmt.Errorf("fallback-server refer to a non-existent server.")
+			}
+			s.destination = fallbackServer
 		} else {
 			// todo i18n
 			_ = s.SendDisconnect(chat.Text("Hey! A valid server address must be provided.\n Please check the server IP carefully!"))
@@ -327,7 +345,7 @@ func (s *PortalConn) handleConfiguration() error {
 		return s.handlePlay() // transition to play state
 	}
 	goTransfer := func() error {
-		if err := s.goTransfer(s.destination); err != nil {
+		if err := s.TransferDestination(); err != nil {
 			return err
 		}
 		return s.sendFinishConfiguration()
