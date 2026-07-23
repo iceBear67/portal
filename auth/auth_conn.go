@@ -5,7 +5,6 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -16,6 +15,10 @@ import (
 	"github.com/icebear67/mfp-go"
 	"github.com/icebear67/mfp-go/pip"
 )
+
+// errNameTaken is returned during registration when the requested name is
+// already registered under a different uuid and collisions are disallowed.
+var errNameTaken = errors.New("name already registered by another account")
 
 type AuthConnHandler struct {
 	server           *AuthServer
@@ -47,12 +50,11 @@ func (s *AuthConnHandler) OnServerNameIndicated(conn *limbo.PortalConn, serverNa
 	return nil
 }
 
-func (s *AuthConnHandler) OnTransfer(conn *limbo.PortalConn, target string, port int) {
+func (s *AuthConnHandler) OnTransfer(conn *limbo.PortalConn, target string, port int) error {
 	// set info
 	dest := conn.Destination()
 	if dest == nil {
-		_ = s.OnAuthenticateResult(conn, fmt.Errorf("unknown destination"))
-		return
+		return fmt.Errorf("unknown destination")
 	}
 	id := mfp.Identity{
 		PrivateKey: s.server.privateKey,
@@ -70,29 +72,26 @@ func (s *AuthConnHandler) OnTransfer(conn *limbo.PortalConn, target string, port
 		Until: time.Now().Add(time.Minute * 1),
 	})
 	if err != nil {
-		log.Printf("Error issuing token for %v: %v", conn.PlayerId().String(), err)
-		_ = s.OnAuthenticateResult(conn, fmt.Errorf("cannot issue transfer packet"))
-		return
+		conn.Logf("error issuing redirect token: %v", err)
+		return fmt.Errorf("cannot issue transfer packet")
 	}
 	bytes, err := rt.Marshal()
 	if err != nil {
-		log.Printf("Error issuing token for %v: %v", conn.PlayerId().String(), err)
-		_ = s.OnAuthenticateResult(conn, fmt.Errorf("cannot marshal transfer packet"))
-		return
+		conn.Logf("error marshaling redirect token: %v", err)
+		return fmt.Errorf("cannot marshal transfer packet")
 	}
 	cookies, err := pip.Chunk("pip:redirect", bytes)
 	if err != nil {
-		log.Printf("Error issuing token for %v: %v", conn.PlayerId().String(), err)
-		_ = s.OnAuthenticateResult(conn, fmt.Errorf("cannot issue redirect packet"))
-		return
+		conn.Logf("error chunking redirect token: %v", err)
+		return fmt.Errorf("cannot issue redirect packet")
 	}
 	for k, v := range cookies {
-		err = conn.SetCookie(k, v)
-		if err != nil {
-			_ = s.OnAuthenticateResult(conn, fmt.Errorf("cannot set cookie %v", k))
-			return
+		if err = conn.SetCookie(k, v); err != nil {
+			conn.Logf("error setting cookie %v: %v", k, err)
+			return fmt.Errorf("cannot set cookie %v", k)
 		}
 	}
+	return nil
 }
 
 func (s *AuthConnHandler) OnAuthentication(conn *limbo.PortalConn, sendLimbo func() error, transfer func() error) error {
@@ -238,12 +237,22 @@ func (s *AuthConnHandler) initiateRegistrationFlow(conn *limbo.PortalConn) error
 			if err := conn.SendChatMessage(chat.Text("Confirm your password by sending it again"), false); err != nil {
 				return errors.Join(err, s.authListener.OnAuthenticateResult(conn, err))
 			}
-			if err := conn.Connection().ReadPacket(&pkt); err != nil {
-				return err
-			}
-			msg2, e := conn.ReadChatMessage(&pkt)
-			if e != nil {
-				return e
+			// Only a chat packet carries the confirmation; skip anything else
+			// (e.g. a keepalive response) that may arrive in between.
+			var msg2 string
+			for {
+				if err := conn.Connection().ReadPacket(&pkt); err != nil {
+					return err
+				}
+				if int(pkt.ID) != conn.ProtocolVersion().ChatMessage() {
+					continue
+				}
+				var e error
+				msg2, e = conn.ReadChatMessage(&pkt)
+				if e != nil {
+					return e
+				}
+				break
 			}
 			if msg != msg2 {
 				if err := conn.SendChatMessage(chat.Text("Password mismatch. try your password again."), false); err != nil {
@@ -258,8 +267,22 @@ func (s *AuthConnHandler) initiateRegistrationFlow(conn *limbo.PortalConn) error
 			// register
 			regCtx, cancelFn := context.WithCancel(conn.Context())
 
-			s.server.registerQueue <- &DatabaseOp{
+			op := &DatabaseOp{
 				action: func(acc *DatabaseAccess) error {
+					// Reject registering a name already owned by a different
+					// uuid, unless name collisions are explicitly allowed. Done
+					// inside the write tx so the check and insert are atomic.
+					if !s.server.config.AllowNameCollision {
+						existing, err := acc.FindByNameUnorder(conn.PlayerName())
+						if err != nil {
+							return err
+						}
+						for _, r := range *existing {
+							if r.Id != *conn.PlayerId() {
+								return errNameTaken
+							}
+						}
+					}
 					ur := UserRecord{
 						Name:         conn.PlayerName(),
 						Id:           *conn.PlayerId(),
@@ -279,16 +302,28 @@ func (s *AuthConnHandler) initiateRegistrationFlow(conn *limbo.PortalConn) error
 				callback: func(err error) {
 					defer cancelFn()
 					if err != nil {
-						_ = conn.SendDisconnect(chat.Text("Failed to register your account. Please try again later."))
-						log.Println("Failed to register account for", conn.PlayerName(), ":", err)
+						msg := "Failed to register your account. Please try again later."
+						if errors.Is(err, errNameTaken) {
+							msg = "This name is already registered by another account."
+						}
+						_ = conn.SendDisconnect(chat.Text(msg))
+						conn.Logf("registration failed: %v", err)
 						return
 					}
 					_ = conn.SendChatMessage(chat.Text("Registration successfully. You'll be redirected soon"), false)
 					if err = conn.TransferDestination(); err != nil {
-						log.Println("Failed to redirect", conn.PlayerName(), "after registration. err:", err)
+						conn.Logf("failed to redirect after registration: %v", err)
 						return
 					}
 				},
+			}
+			// ctx-aware send so we don't block forever if the writer has
+			// already stopped (ctx cancelled).
+			select {
+			case s.server.registerQueue <- op:
+			case <-conn.Context().Done():
+				cancelFn()
+				return conn.Context().Err()
 			}
 			select {
 			case <-regCtx.Done():

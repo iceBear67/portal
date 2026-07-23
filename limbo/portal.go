@@ -10,6 +10,7 @@ import (
 	"log"
 	"maps"
 	"regexp"
+	"sync/atomic"
 	"time"
 
 	"github.com/Tnze/go-mc/chat"
@@ -36,6 +37,7 @@ type Server struct {
 	eventBus      *eventbus.EventBus
 	eventListener EventListenerHost
 	ctx           context.Context
+	connCounter   atomic.Uint64
 }
 
 func (s *Server) Ctx() context.Context {
@@ -61,7 +63,7 @@ func NewServer(config *PortalConfig, registry *RegistryMap, ctx context.Context)
 	if err != nil {
 		return nil, err
 	}
-	keys := make([]mfp.PublicKey, 4)
+	keys := make([]mfp.PublicKey, 0, len(config.Servers))
 	for i := range maps.Values(config.Servers) {
 		keys = append(keys, mfp.PublicKey(i.PublicKey))
 	}
@@ -93,9 +95,14 @@ func (s *Server) Start() error {
 	s.feedRemoteStatus()
 	go func() {
 		t := time.NewTicker(10 * time.Second)
-		select {
-		case <-t.C:
-			s.feedRemoteStatus()
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				s.feedRemoteStatus()
+			case <-s.ctx.Done():
+				return
+			}
 		}
 	}()
 	go func() {
@@ -116,6 +123,7 @@ func (s *Server) Start() error {
 		}
 		pc := PortalConn{
 			server:          s,
+			id:              s.connCounter.Add(1),
 			requestedHost:   "",
 			protocolVersion: 0,
 			state:           StateHandshake,
@@ -128,9 +136,9 @@ func (s *Server) Start() error {
 		}
 		go func() {
 			defer s.eventListener.OnDisconnect(&pc)
-			err := pc.startLoginSequence(s.Config.AuthTimeout) // todo send disconnect message
+			err := pc.startLoginSequence(s.Config.AuthTimeout, s.Config.StatusTimeout)
 			if err != nil {
-				log.Println("Error from connection", conn.Socket.RemoteAddr(), ":", err)
+				pc.Logf("connection closed: %v", err)
 			}
 		}()
 	}
@@ -140,20 +148,51 @@ func (s *Server) SetupListener(listener EventListenerHost) {
 	s.eventListener = listener
 }
 
-func (s *PortalConn) startLoginSequence(timeout time.Duration) error {
-	ctx, fn := context.WithTimeout(context.Background(), timeout)
+// Handshake "next state" (intent) values.
+const (
+	intentStatus = 1
+	intentLogin  = 2
+	intentRTDP   = 127
+)
+
+func (s *PortalConn) startLoginSequence(authTimeout, statusTimeout time.Duration) error {
+	// Bound the handshake read itself with the (short) status timeout so idle
+	// sockets that never send a handshake cannot linger for the full auth
+	// timeout. The deadline is cleared once we know the intent.
+	_ = s.conn.Socket.SetReadDeadline(time.Now().Add(statusTimeout))
+	intent, err := s.readHandshake()
+	_ = s.conn.Socket.SetReadDeadline(time.Time{})
+	if err != nil {
+		return err
+	}
+
+	var (
+		ctx context.Context
+		fn  context.CancelFunc
+	)
+	if intent == pk.VarInt(intentRTDP) {
+		// RTDP peer sessions are long-lived server-to-server links; they get no
+		// timeout, only cancellation when the server shuts down.
+		ctx, fn = context.WithCancel(s.server.ctx)
+	} else {
+		// Status pings are cheap and frequent; they get a much shorter budget
+		// than the interactive login/auth flow.
+		timeout := authTimeout
+		if intent == pk.VarInt(intentStatus) {
+			timeout = statusTimeout
+		}
+		ctx, fn = context.WithTimeout(context.Background(), timeout)
+	}
 	s.ctx = ctx
 	go func() {
-		select {
-		case <-ctx.Done():
-			if !errors.Is(ctx.Err(), context.Canceled) {
-				log.Println("Authentication process timed out for connection", s)
-			}
-			s.conn.Close()
+		<-ctx.Done()
+		if !errors.Is(ctx.Err(), context.Canceled) {
+			s.Logf("connection timed out")
 		}
+		s.conn.Close()
 	}()
 	defer fn()
-	return s.handleHandshake()
+	return s.dispatch(intent)
 }
 
 func (s *Server) feedRemoteStatus() {
@@ -168,33 +207,38 @@ func (s *Server) feedRemoteStatus() {
 	}
 }
 
-func (s *PortalConn) handleHandshake() error {
+// readHandshake reads the handshake packet, populating protocolVersion and
+// requestedHost, and returns the client's requested next-state (intent).
+func (s *PortalConn) readHandshake() (pk.VarInt, error) {
 	var pkt pk.Packet
 	err := s.conn.ReadPacket(&pkt)
 	if err != nil {
-		log.Println("could not read handshake from ", s)
-		return err
+		s.Logf("could not read handshake: %v", err)
+		return 0, err
 	}
 	if pkt.ID != 0x00 {
-		return fmt.Errorf("unexpected handshake packet %v", pkt.ID)
+		return 0, fmt.Errorf("unexpected handshake packet %v", pkt.ID)
 	}
 	var (
 		Protocol, Intent pk.VarInt
 		ServerAddress    pk.String        // ignored
 		Port             pk.UnsignedShort // ignored
 	)
-	err = pkt.Scan(&Protocol, &ServerAddress, &Port, &Intent)
-	if err != nil {
-		return err
+	if err = pkt.Scan(&Protocol, &ServerAddress, &Port, &Intent); err != nil {
+		return 0, err
 	}
 	s.protocolVersion = ProtocolVersion(Protocol)
 	s.requestedHost = string(ServerAddress)
-	switch Intent {
-	case pk.VarInt(1):
+	return Intent, nil
+}
+
+func (s *PortalConn) dispatch(intent pk.VarInt) error {
+	switch intent {
+	case pk.VarInt(intentStatus):
 		return s.handleStatus()
-	case pk.VarInt(2):
+	case pk.VarInt(intentLogin):
 		return s.handleLogin()
-	case pk.VarInt(127):
+	case pk.VarInt(intentRTDP):
 		return s.handleRtdpQuery()
 	default: // todo transfer
 		return fmt.Errorf("transfer intent not supported")
@@ -220,7 +264,7 @@ func (s *PortalConn) handleStatus() error {
 			val, ok := s.server.cachedInfo.Get(s.requestedHost)
 			if !ok {
 				val = &s.server.Config.DefaultInfo
-				log.Println("client", s.conn.Socket.RemoteAddr(), "is requesting status for a non-existent server \""+s.requestedHost+"\"")
+				s.Logf("requesting status for a non-existent server %q", s.requestedHost)
 			}
 			err = s.sendStatusResponse(val.(*slp.ServerListPing))
 			if err != nil {
@@ -288,7 +332,7 @@ func (s *PortalConn) handleLogin() error {
 	}
 	// Try to authenticate with Mojang
 	if s.online {
-		log.Println("Authenticating", playerName, "with yggdrasil...")
+		s.Logf("authenticating %v with yggdrasil...", playerName)
 		var resp *Resp
 		if resp, err = s.listener.OnYggdrasilChallenge(s, string(playerName), uuid.UUID(clientSuggestId), s.server.PrivateKey); err != nil {
 			return err
@@ -298,7 +342,7 @@ func (s *PortalConn) handleLogin() error {
 		if err != nil {
 			return err
 		}
-		log.Println("Player", playerName, "has been authenticated by Yggdrasil.")
+		s.Logf("authenticated by Yggdrasil")
 	} else {
 		prop := []user.Property{{Name: "textures", Value: s.server.Config.DefaultSkin}}
 		s.playerId = &theoryOfflineId
@@ -306,7 +350,7 @@ func (s *PortalConn) handleLogin() error {
 		if err != nil {
 			return err
 		}
-		log.Println("Player", playerName, "joined with offline mode.")
+		s.Logf("joined in offline mode")
 	}
 	return s.handleConfiguration()
 }
@@ -334,7 +378,9 @@ func (s *PortalConn) handleConfiguration() error {
 		if !ok {
 			return fmt.Errorf("no registry data found for protocol version %v", s.protocolVersion)
 		}
+		s.writeMu.Lock()
 		_, err = s.conn.Write(data.Value())
+		s.writeMu.Unlock()
 		if err != nil {
 			return err
 		}
@@ -352,7 +398,7 @@ func (s *PortalConn) handleConfiguration() error {
 	}
 	err = s.listener.OnAuthentication(s, setupLimbo, goTransfer)
 	if err != nil {
-		log.Println("Cannot authenticate player", s.playerName, "due to err:", err)
+		s.Logf("authentication failed: %v", err)
 		s.SendDisconnect(chat.Text("Access denied\n\nAn internal error has occurred, please contact the administrator for help. "))
 		return err
 	}
@@ -397,7 +443,7 @@ func (s *PortalConn) handlePlayInitialization() error {
 			}
 		} else if int(pkt.ID) == s.protocolVersion.PlayerLoadedJoin() && phase == 1 {
 			phase = 2
-			log.Println("Player", s.playerName+"/"+s.playerId.String(), "has joined.")
+			s.Logf("player %v has joined", s.playerId)
 			err = s.listener.OnPlayerReady(s) //todo log
 			if err != nil {
 				return err

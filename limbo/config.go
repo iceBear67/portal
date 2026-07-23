@@ -18,6 +18,7 @@ type PortalConfig struct {
 	DefaultInfo     slp.ServerListPing       `yaml:"default-info"`
 	DefaultSkin     string                   `yaml:"default-skin"`
 	AuthTimeout     time.Duration            `yaml:"auth-timeout"`
+	StatusTimeout   time.Duration            `yaml:"status-timeout"`
 	Keepalive       time.Duration            `yaml:"keepalive-interval-sec"`
 	PrivateKey      EncodedPrivateKey        `yaml:"private-key"`
 	RegistryData    map[int]string           `yaml:"registry-data"`

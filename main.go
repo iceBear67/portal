@@ -62,7 +62,7 @@ func loadConfig() *limbo.PortalConfig {
 		Listen:          ":25565",
 		FallbackServer:  "",
 		CacheInvalidate: 60 * time.Second,
-		Servers:         make(map[string]string),
+		Servers:         make(map[string]*limbo.ServerConfig),
 		DefaultInfo: slp.ServerListPing{
 			Version: slp.ServerVersion{
 				Name:     "Error",
@@ -76,14 +76,18 @@ func loadConfig() *limbo.PortalConfig {
 			Description: chat.Text("The requested Minecraft Server is currently offline.\nConsult the server administrator for more information."),
 			FavIcon:     "",
 		},
-		DefaultSkin:  "e3RleHR1cmVzOntTS0lOOnt1cmw6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvODM3NmI4Y2RjZDUzM2YyNWI5NDlkOWU0MDYxYzM5ZDBlNWNjNTI2ZmJkYTBkZDBkMmI0YjVmNzgzZjIyMjJkZiJ9fX0=",
-		AuthTimeout:  120 * time.Second,
-		Keepalive:    15 * time.Second,
-		RegistryData: make(map[int]string),
+		DefaultSkin:   "e3RleHR1cmVzOntTS0lOOnt1cmw6Imh0dHA6Ly90ZXh0dXJlcy5taW5lY3JhZnQubmV0L3RleHR1cmUvODM3NmI4Y2RjZDUzM2YyNWI5NDlkOWU0MDYxYzM5ZDBlNWNjNTI2ZmJkYTBkZDBkMmI0YjVmNzgzZjIyMjJkZiJ9fX0=",
+		AuthTimeout:   120 * time.Second,
+		StatusTimeout: 10 * time.Second,
+		Keepalive:     15 * time.Second,
+		RegistryData:  make(map[int]string),
 	}
 	loadAndUnmarshalOrDefault(config, "limbo.yaml")
 	if config.AuthTimeout <= 0 {
 		config.AuthTimeout = 120 * time.Second
+	}
+	if config.StatusTimeout <= 0 {
+		config.StatusTimeout = 10 * time.Second
 	}
 	if config.Keepalive <= 0 {
 		config.Keepalive = 15 * time.Second

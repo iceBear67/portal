@@ -3,7 +3,9 @@ package limbo
 import (
 	"context"
 	"crypto/rsa"
+	"fmt"
 	"log"
+	"sync"
 
 	"github.com/Tnze/go-mc/net"
 	"github.com/google/uuid"
@@ -13,6 +15,8 @@ import (
 
 type PortalConn struct {
 	server *Server
+	// monotonic per-server connection id, used to correlate log lines.
+	id uint64
 	// not valid until login success
 	playerId   *uuid.UUID
 	playerName string
@@ -31,8 +35,33 @@ type PortalConn struct {
 	ctx      context.Context
 	listener ConnectionListener
 
-	// prevent multiple disconnection
+	// serializes all writes to conn; keepalive runs on its own goroutine
+	// concurrently with the main handler, and go-mc's net.Conn is not
+	// write-safe (a shared CFB8 stream cipher would corrupt otherwise).
+	writeMu sync.Mutex
+
+	// prevent multiple disconnection (guarded by writeMu)
 	_disconnected bool
+}
+
+// Id returns the connection's monotonic id.
+func (s *PortalConn) Id() uint64 { return s.id }
+
+// String renders a stable connection tag for logging.
+func (s *PortalConn) String() string {
+	addr := "?"
+	if s.conn != nil && s.conn.Socket != nil {
+		addr = s.conn.Socket.RemoteAddr().String()
+	}
+	if s.playerName != "" {
+		return fmt.Sprintf("conn#%d %s %s", s.id, addr, s.playerName)
+	}
+	return fmt.Sprintf("conn#%d %s", s.id, addr)
+}
+
+// Logf writes a connection-scoped log line prefixed with [String()].
+func (s *PortalConn) Logf(format string, args ...any) {
+	log.Printf("["+s.String()+"] "+format, args...)
 }
 
 func (s *PortalConn) Server() *Server {
@@ -65,8 +94,9 @@ func (s *PortalConn) ProtocolVersion() ProtocolVersion {
 
 type ConnectionListener interface {
 	Init(conn *PortalConn) error
-	// setup cookies here
-	OnTransfer(conn *PortalConn, target string, port int)
+	// OnTransfer sets up cookies before the transfer packet is sent. Returning
+	// an error aborts the transfer (the caller will not send the packet).
+	OnTransfer(conn *PortalConn, target string, port int) error
 	OnAuthentication(conn *PortalConn, enterLimbo func() error, transfer func() error) error
 	OnLimboJoin(conn *PortalConn) error
 	OnPlayerReady(conn *PortalConn) error
@@ -145,8 +175,8 @@ func (s StubListener) OnNewConnection(conn *PortalConn) bool {
 func (s StubListener) OnDisconnect(conn *PortalConn) {
 }
 
-func (s StubListener) OnTransfer(conn *PortalConn, target string, port int) {
-
+func (s StubListener) OnTransfer(conn *PortalConn, target string, port int) error {
+	return nil
 }
 
 func (s StubListener) OnAuthentication(conn *PortalConn, enterLimbo func() error, transfer func() error) error {

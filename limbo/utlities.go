@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/Tnze/go-mc/net"
@@ -41,8 +40,10 @@ func (s *PortalConn) goTransfer(serverHost string, serverPort int) error {
 	if s.state != StateConfig && s.state != StatePlay {
 		return errors.New("invalid state invoking transfer")
 	}
-	log.Println("Redirecting", s.playerId, "to", serverHost)
-	s.listener.OnTransfer(s, serverHost, serverPort)
+	s.Logf("redirecting to %v:%v", serverHost, serverPort)
+	if err := s.listener.OnTransfer(s, serverHost, serverPort); err != nil {
+		return err
+	}
 	if err := s.SendTransfer(serverHost, serverPort); err != nil {
 		return err
 	}

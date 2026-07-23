@@ -124,22 +124,26 @@ type DatabaseOp struct {
 func createWriter(db *sqlx.DB, ctx context.Context) (chan *DatabaseOp, error) {
 	ch := make(chan *DatabaseOp, 16)
 	go func() {
-		select {
-		case <-ctx.Done():
-			close(ch)
-		}
-	}()
-	go func() {
-		for req := range ch {
-			tx, err := db.Beginx()
-			if err != nil {
-				log.Println("Failed to access database!")
+		// The channel is never closed: producers may still hold a reference
+		// after ctx is cancelled, so closing here would risk a send-on-closed
+		// panic. We simply stop draining on ctx.Done and let the buffered ops
+		// be garbage-collected. Producers send with a ctx-aware select so they
+		// don't block once we've stopped.
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case req := <-ch:
+				tx, err := db.Beginx()
+				if err != nil {
+					log.Println("Failed to access database!")
+					req.callback(err)
+					continue
+				}
+				acc := Access(tx)
+				err = errors.Join(req.action(acc), tx.Commit())
 				req.callback(err)
-				continue
 			}
-			acc := Access(tx)
-			err = errors.Join(req.action(acc), tx.Commit())
-			req.callback(err)
 		}
 	}()
 	return ch, nil

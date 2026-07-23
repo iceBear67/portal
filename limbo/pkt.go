@@ -11,29 +11,40 @@ import (
 	"github.com/go-mc/server/limbo/slp"
 )
 
+// writePacket serializes a single packet write under writeMu so concurrent
+// writers (e.g. the keepalive goroutine) can never interleave bytes or corrupt
+// the shared stream cipher.
+func (s *PortalConn) writePacket(p pk.Packet) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.writePacket(p)
+}
+
 func (s *PortalConn) sendStatusResponse(info *slp.ServerListPing) error {
 	str, err := json.Marshal(info)
 	if err != nil {
 		return err
 	}
-	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.StatusResponse(), pk.String(str)))
+	return s.writePacket(pk.Marshal(s.protocolVersion.StatusResponse(), pk.String(str)))
 }
 
 func (s *PortalConn) sendPingResponse(pkt *pk.Packet) error {
-	return s.conn.WritePacket(*pkt)
+	return s.writePacket(*pkt)
 }
 
 func (s *PortalConn) SendDisconnect(message chat.Message) error {
-	if s._disconnected {
-		return nil
-	}
-	s._disconnected = true
-
 	disconnectMsg, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}
+	s.writeMu.Lock()
+	if s._disconnected {
+		s.writeMu.Unlock()
+		return nil
+	}
+	s._disconnected = true
 	_ = s.conn.WritePacket(pk.Marshal(s.protocolVersion.DisconnectLogin(), pk.String(disconnectMsg)))
+	s.writeMu.Unlock()
 	return s.conn.Close()
 }
 
@@ -45,14 +56,14 @@ func (s *PortalConn) SetCookie(key string, value []byte) error {
 	if s.state == StatePlay {
 		pktId = s.protocolVersion.StoreCookiePlay()
 	}
-	return s.conn.WritePacket(pk.Marshal(
+	return s.writePacket(pk.Marshal(
 		pktId, pk.Identifier(key), pk.ByteArray(value),
 	))
 }
 
 func (s *PortalConn) sendLoginSuccess(playerUUID pk.UUID, playerName pk.String, properties []user.Property, strictErrorHandling bool) error {
 	if s.protocolVersion == 766 || s.protocolVersion == 767 {
-		return s.conn.WritePacket(pk.Marshal(
+		return s.writePacket(pk.Marshal(
 			s.protocolVersion.LoginSuccess(),
 			playerUUID,
 			playerName,
@@ -60,7 +71,7 @@ func (s *PortalConn) sendLoginSuccess(playerUUID pk.UUID, playerName pk.String, 
 			pk.Boolean(strictErrorHandling),
 		))
 	}
-	return s.conn.WritePacket(pk.Marshal(
+	return s.writePacket(pk.Marshal(
 		s.protocolVersion.LoginSuccess(),
 		playerUUID,
 		playerName,
@@ -69,7 +80,7 @@ func (s *PortalConn) sendLoginSuccess(playerUUID pk.UUID, playerName pk.String, 
 }
 
 func (s *PortalConn) sendFinishConfiguration() error {
-	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.FinishConfiguration()))
+	return s.writePacket(pk.Marshal(s.protocolVersion.FinishConfiguration()))
 }
 
 func (s *PortalConn) SendTransfer(host string, port int) error {
@@ -77,11 +88,11 @@ func (s *PortalConn) SendTransfer(host string, port int) error {
 	if s.state == StateConfig {
 		packetId = s.protocolVersion.TransferConfig()
 	}
-	return s.conn.WritePacket(pk.Marshal(packetId, pk.String(host), pk.VarInt(port)))
+	return s.writePacket(pk.Marshal(packetId, pk.String(host), pk.VarInt(port)))
 }
 
 func (s *PortalConn) sendBrand(brand string) error {
-	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.PluginChannelConfig(), pk.String("minecraft:brand"), pk.String(brand)))
+	return s.writePacket(pk.Marshal(s.protocolVersion.PluginChannelConfig(), pk.String("minecraft:brand"), pk.String(brand)))
 }
 
 func (s *PortalConn) sendKeepAliveChallenge(challenge int64) error {
@@ -89,11 +100,11 @@ func (s *PortalConn) sendKeepAliveChallenge(challenge int64) error {
 	if s.state == StateConfig {
 		id = s.protocolVersion.ClientboundKeepaliveConfig()
 	}
-	return s.conn.WritePacket(pk.Marshal(id, pk.Long(challenge)))
+	return s.writePacket(pk.Marshal(id, pk.Long(challenge)))
 }
 
 func (s *PortalConn) sendLoginPlay() error {
-	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.LoginPlay(),
+	return s.writePacket(pk.Marshal(s.protocolVersion.LoginPlay(),
 		pk.Int(114514),
 		pk.Boolean(false),
 		pk.Array([]pk.Identifier{"minecraft:overworld"}),
@@ -118,15 +129,15 @@ func (s *PortalConn) sendLoginPlay() error {
 }
 
 func (s *PortalConn) sendEmptyChunk(chunkX int, chunkZ int) error {
-	return s.conn.WritePacket(BuildEmptyChunkPacket(chunkX, chunkZ)) //todo cache
+	return s.writePacket(BuildEmptyChunkPacket(chunkX, chunkZ)) //todo cache
 }
 
 func (s *PortalConn) sendGameEvent13() error {
-	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.GameEvent(), pk.UnsignedByte(13), pk.Float(0))) // gameevent 13
+	return s.writePacket(pk.Marshal(s.protocolVersion.GameEvent(), pk.UnsignedByte(13), pk.Float(0))) // gameevent 13
 }
 
 func (s *PortalConn) sendSynchronizePosition() error {
-	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.SynchronizePosition(), pk.VarInt(1919), // Synchronize position todo cache
+	return s.writePacket(pk.Marshal(s.protocolVersion.SynchronizePosition(), pk.VarInt(1919), // Synchronize position todo cache
 		pk.Double(0),  //X
 		pk.Double(70), //Y
 		pk.Double(0),  //Z
@@ -140,7 +151,7 @@ func (s *PortalConn) sendSynchronizePosition() error {
 }
 
 func (s *PortalConn) SendResetChat() error {
-	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.ResetChatPlay()))
+	return s.writePacket(pk.Marshal(s.protocolVersion.ResetChatPlay()))
 }
 
 func (s *PortalConn) ReadChatMessage(pkt *pk.Packet) (string, error) {
@@ -153,19 +164,19 @@ func (s *PortalConn) ReadChatMessage(pkt *pk.Packet) (string, error) {
 }
 
 func (s *PortalConn) SendChatMessage(ch chat.Message, overlay bool) error {
-	return s.conn.WritePacket(pk.Marshal(s.protocolVersion.SystemMessage(), ch, pk.Boolean(overlay)))
+	return s.writePacket(pk.Marshal(s.protocolVersion.SystemMessage(), ch, pk.Boolean(overlay)))
 }
 
 func (s *PortalConn) SendTitle(ch *chat.Message, subt *chat.Message) error {
 	var err error
 	if ch != nil {
-		err = s.conn.WritePacket(pk.Marshal(s.protocolVersion.SetTitle(), *ch))
+		err = s.writePacket(pk.Marshal(s.protocolVersion.SetTitle(), *ch))
 	}
 	if err != nil {
 		return err
 	}
 	if subt != nil {
-		return s.conn.WritePacket(pk.Marshal(s.protocolVersion.SetTitleSub(), *subt))
+		return s.writePacket(pk.Marshal(s.protocolVersion.SetTitleSub(), *subt))
 	}
 	return nil
 }
