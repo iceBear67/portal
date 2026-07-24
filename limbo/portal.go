@@ -200,7 +200,7 @@ func (s *Server) feedRemoteStatus() {
 	for name, addr := range s.Config.Servers {
 		result, err := HarvestStatus(addr, ctx, 3*time.Second)
 		if err != nil {
-			log.Printf("Error getting server status from %v: %v", addr, err)
+			log.Printf("Error getting server status from %v: %v", name, err)
 			continue
 		}
 		s.cachedInfo.SetDefault(name, result)
@@ -261,12 +261,17 @@ func (s *PortalConn) handleStatus() error {
 		}
 		if pkt.ID == 0x00 && !statusAnswered {
 			statusAnswered = true
-			val, ok := s.server.cachedInfo.Get(s.requestedHost)
-			if !ok {
-				val = &s.server.Config.DefaultInfo
+			info := &s.server.Config.DefaultInfo
+			if name, _, ok := s.server.Config.MatchServer(s.requestedHost); ok {
+				if cached, ok := s.server.cachedInfo.Get(name); ok {
+					info = cached.(*slp.ServerListPing)
+				} else {
+					s.Logf("no cached status yet for server %q (host %q)", name, s.requestedHost)
+				}
+			} else {
 				s.Logf("requesting status for a non-existent server %q", s.requestedHost)
 			}
-			err = s.sendStatusResponse(val.(*slp.ServerListPing))
+			err = s.sendStatusResponse(info)
 			if err != nil {
 				return err
 			}
@@ -298,7 +303,7 @@ func (s *PortalConn) handleLogin() error {
 	}
 	// check host and destination, otherwise reject.
 	fallback := s.server.Config.FallbackServer
-	destination, ok := s.server.Config.Servers[s.requestedHost]
+	_, destination, ok := s.server.Config.MatchServer(s.requestedHost)
 	s.destination = destination
 	if !ok {
 		fallbackServer, ok := s.server.Config.Servers[fallback]

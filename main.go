@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"log"
 	"os"
 	"strconv"
@@ -51,13 +53,14 @@ func main() {
 func loadAuthServerConfig() *auth.AuthConfig {
 	config := auth.NewAuthConfig()
 	loadAndUnmarshalOrDefault(config, "auth.yaml")
-	if config.PrivateKey == "" {
-		panic("no private key provided, you can generate one from `openssl genpkey -algorithm Ed25519` or delete the configuration file.")
-	}
 	return config
 }
 
 func loadConfig() *limbo.PortalConfig {
+	_, privKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		log.Fatalf("Error generating key: %v", err)
+	}
 	config := &limbo.PortalConfig{
 		Listen:          ":25565",
 		FallbackServer:  "",
@@ -81,6 +84,7 @@ func loadConfig() *limbo.PortalConfig {
 		StatusTimeout: 10 * time.Second,
 		Keepalive:     15 * time.Second,
 		RegistryData:  make(map[int]string),
+		PrivateKey:    limbo.EncodedPrivateKey(privKey),
 	}
 	loadAndUnmarshalOrDefault(config, "limbo.yaml")
 	if config.AuthTimeout <= 0 {

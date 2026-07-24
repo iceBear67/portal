@@ -2,10 +2,10 @@ package auth
 
 import (
 	"crypto/ed25519"
-	"encoding/base64"
 	"fmt"
 
 	"github.com/go-mc/server/limbo"
+	"github.com/icebear67/mfp-go"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -20,10 +20,6 @@ type AuthServer struct {
 }
 
 func NewAuthServer(server *limbo.Server, config *AuthConfig) (*AuthServer, error) {
-	privKey, err := base64.StdEncoding.DecodeString(config.PrivateKey)
-	if err != nil {
-		return nil, err
-	}
 	db, err := sqlx.Open(config.Database.Driver, config.Database.Connect)
 	if err != nil {
 		return nil, err
@@ -40,11 +36,15 @@ func NewAuthServer(server *limbo.Server, config *AuthConfig) (*AuthServer, error
 	return &AuthServer{
 		server:        server,
 		config:        config,
-		privateKey:    privKey,
-		publicKey:     ed25519.PrivateKey(privKey).Public().(ed25519.PublicKey),
+		privateKey:    ed25519.PrivateKey(server.Config.PrivateKey),
+		publicKey:     ed25519.PrivateKey(server.Config.PrivateKey).Public().(ed25519.PublicKey),
 		registerQueue: writer,
 		database:      db,
 	}, nil
+}
+
+func (s *AuthServer) Identity() *mfp.Identity {
+	return s.server.Identity
 }
 
 func (s *AuthServer) Start() error {

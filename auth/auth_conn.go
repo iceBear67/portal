@@ -56,10 +56,8 @@ func (s *AuthConnHandler) OnTransfer(conn *limbo.PortalConn, target string, port
 	if dest == nil {
 		return fmt.Errorf("unknown destination")
 	}
-	id := mfp.Identity{
-		PrivateKey: s.server.privateKey,
-	}
-	rt, err := pip.Issue(&id, pip.TokenParams{
+	id := s.server.Identity()
+	rt, err := pip.Issue(id, pip.TokenParams{
 		Target:  mfp.PublicKey(dest.PublicKey),
 		Subject: conn.PlayerId()[:],
 		Profile: &pip.PlayerProfile{

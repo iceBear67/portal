@@ -1,15 +1,7 @@
 package auth
 
-import (
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/base64"
-)
-
 type AuthConfig struct {
 	Enabled bool `yaml:"enabled"`
-	// the ed25519 private key used to sign
-	PrivateKey string `yaml:"private-key"`
 	// The key is used to identify user source so it must be unique
 	YggdrasilServers map[string]string `yaml:"yggdrasil-servers"`
 	// Bypass limbo authentication for yggdrasil authenticated players.
@@ -29,13 +21,8 @@ type DatabaseConfig struct {
 }
 
 func NewAuthConfig() *AuthConfig {
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		panic(err)
-	}
 	return &AuthConfig{
-		Enabled:    true,
-		PrivateKey: base64.StdEncoding.EncodeToString(priv),
+		Enabled: true,
 		YggdrasilServers: map[string]string{
 			"mojang": "https://sessionserver.mojang.com/",
 		},
